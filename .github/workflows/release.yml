@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build and publish (e.g. v2.0.0)'
+        required: true
+        default: 'v2.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish macOS Release
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version from git tag
+        id: version
+        run: |
+          RAW_TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          CLEAN_VERSION="${RAW_TAG#v}"
+          echo "tag=${RAW_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${CLEAN_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building Positron release ${RAW_TAG} (CFBundleShortVersionString=${CLEAN_VERSION})"
+
+      - name: Build and verify test suites
+        run: |
+          make test VERSION="${{ steps.version.outputs.version }}"
+
+      - name: Build and package Positron.app release archives
+        run: |
+          make package VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          cp out/Positron-macOS-arm64.dmg "out/Positron-${TAG}-macOS-arm64.dmg"
+          cp out/Positron-macOS-arm64.zip "out/Positron-${TAG}-macOS-arm64.zip"
+          cd out && shasum -a 256 \
+            "Positron-${TAG}-macOS-arm64.dmg" \
+            "Positron-${TAG}-macOS-arm64.zip" \
+            Positron-macOS-arm64.dmg \
+            Positron-macOS-arm64.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          cat << 'EOF' > out/RELEASE_NOTES.md
+          ## Positron ${{ steps.version.outputs.tag }} — Steam Play for macOS
+
+          ### Download & Installation
+          1. Download **`Positron-${{ steps.version.outputs.tag }}-macOS-arm64.dmg`** (or **`Positron-macOS-arm64.zip`**) below.
+          2. Drag **`Positron.app`** to your `/Applications` folder.
+          3. On first launch, if macOS Gatekeeper prompts that the app is ad-hoc signed, run:
+             ```bash
+             xattr -cr /Applications/Positron.app
+             ```
+          4. Open **Positron.app** and click **Enable Positron in Steam**.
+
+          ### Requirements
+          - macOS 15.0 (Sequoia) or newer on Apple Silicon (`arm64`)
+          - Native macOS Steam client
+          - CrossOver, CrossOver Preview, or a compatible Wine/FEX runtime installed
+          EOF
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Positron ${{ steps.version.outputs.tag }}
+          body_path: out/RELEASE_NOTES.md
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
+          files: |
+            out/Positron-${{ steps.version.outputs.tag }}-macOS-arm64.dmg
+            out/Positron-${{ steps.version.outputs.tag }}-macOS-arm64.zip
+            out/Positron-macOS-arm64.dmg
+            out/Positron-macOS-arm64.zip
+            out/SHA256SUMS.txt

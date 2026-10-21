@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & Test (macOS Apple Silicon)
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          swift --version
+          clang --version
+          cmake --version
+
+      - name: Build Dobby, C components, and Positron.app
+        run: make all
+
+      - name: Run C & Swift test suites
+        run: make test
+
+      - name: Package Positron.app (.dmg and .zip)
+        run: make package
+
+      - name: Upload Positron.app build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Positron-macOS-arm64
+          path: |
+            out/Positron-macOS-arm64.dmg
+            out/Positron-macOS-arm64.zip
+            out/SHA256SUMS.txt
+          retention-days: 14

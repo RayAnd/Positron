@@ -1,0 +1,16 @@
+# Build & Package Outputs
+/out/
+/build/
+/.build/
+/.swiftpm/
+/.cache/
+
+# Xcode / CMake / IDE
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+compile_commands.json
+.DS_Store
+._*
+*.swp
+*~
