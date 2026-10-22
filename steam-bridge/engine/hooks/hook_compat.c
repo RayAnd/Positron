@@ -71,6 +71,8 @@ static void *hook_FindToolForTargetApp(void *self, uint32_t appid) {
                appid);
         return NULL;
     }
+    // Pick up a preset applied in Positron.app right before Steam resolves the tool for a launch.
+    np_compat_poll_pending_applies();
     void *tool = orig(self, appid);
 
     if (tool || appid == 0)

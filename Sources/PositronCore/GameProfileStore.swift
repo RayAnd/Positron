@@ -42,6 +42,7 @@ public struct GameProfile: Codable, Sendable, Equatable {
     public var translator: CPUTranslator
     public var graphics: GraphicsBackend
     public var sync: SyncPrimitive
+    public var fullscreenMode: Bool
     public var retinaMode: Bool
     public var metalHUD: Bool
     public var advertiseAVX: Bool
@@ -49,6 +50,14 @@ public struct GameProfile: Codable, Sendable, Equatable {
     public var fexReducedPrecision: Bool
     public var dllOverrides: [String: String]
     public var extraEnvironment: [String: String]
+    /// Master switch for this game's fixes (runtime patches, DLL overrides, environment flags).
+    public var gameFixesEnabled: Bool
+    /// IDs of individual fixes the user switched off (RuntimeFix ids, "dll:<name>", "env:<KEY>").
+    public var disabledFixes: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case appID, runnerID, translator, graphics, sync, fullscreenMode, retinaMode, metalHUD, advertiseAVX, disableHidraw, fexReducedPrecision, dllOverrides, extraEnvironment, gameFixesEnabled, disabledFixes
+    }
 
     public init(
         appID: UInt32,
@@ -56,19 +65,23 @@ public struct GameProfile: Codable, Sendable, Equatable {
         translator: CPUTranslator = .rosetta,
         graphics: GraphicsBackend = .d3dMetal,
         sync: SyncPrimitive = .msync,
+        fullscreenMode: Bool = true,
         retinaMode: Bool = false,
         metalHUD: Bool = false,
         advertiseAVX: Bool = true,
         disableHidraw: Bool = false,
         fexReducedPrecision: Bool = true,
         dllOverrides: [String: String] = [:],
-        extraEnvironment: [String: String] = [:]
+        extraEnvironment: [String: String] = [:],
+        gameFixesEnabled: Bool = true,
+        disabledFixes: [String] = []
     ) {
         self.appID = appID
         self.runnerID = runnerID
         self.translator = translator
         self.graphics = graphics
         self.sync = sync
+        self.fullscreenMode = fullscreenMode
         self.retinaMode = retinaMode
         self.metalHUD = metalHUD
         self.advertiseAVX = advertiseAVX
@@ -76,6 +89,27 @@ public struct GameProfile: Codable, Sendable, Equatable {
         self.fexReducedPrecision = fexReducedPrecision
         self.dllOverrides = dllOverrides
         self.extraEnvironment = extraEnvironment
+        self.gameFixesEnabled = gameFixesEnabled
+        self.disabledFixes = disabledFixes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.appID = try c.decode(UInt32.self, forKey: .appID)
+        self.runnerID = try c.decodeIfPresent(String.self, forKey: .runnerID)
+        self.translator = try c.decode(CPUTranslator.self, forKey: .translator)
+        self.graphics = try c.decode(GraphicsBackend.self, forKey: .graphics)
+        self.sync = try c.decode(SyncPrimitive.self, forKey: .sync)
+        self.fullscreenMode = try c.decodeIfPresent(Bool.self, forKey: .fullscreenMode) ?? true
+        self.retinaMode = try c.decodeIfPresent(Bool.self, forKey: .retinaMode) ?? false
+        self.metalHUD = try c.decodeIfPresent(Bool.self, forKey: .metalHUD) ?? false
+        self.advertiseAVX = try c.decodeIfPresent(Bool.self, forKey: .advertiseAVX) ?? true
+        self.disableHidraw = try c.decodeIfPresent(Bool.self, forKey: .disableHidraw) ?? false
+        self.fexReducedPrecision = try c.decodeIfPresent(Bool.self, forKey: .fexReducedPrecision) ?? true
+        self.dllOverrides = try c.decodeIfPresent([String: String].self, forKey: .dllOverrides) ?? [:]
+        self.extraEnvironment = try c.decodeIfPresent([String: String].self, forKey: .extraEnvironment) ?? [:]
+        self.gameFixesEnabled = try c.decodeIfPresent(Bool.self, forKey: .gameFixesEnabled) ?? true
+        self.disabledFixes = try c.decodeIfPresent([String].self, forKey: .disabledFixes) ?? []
     }
 
     public func sanitized() -> GameProfile {
@@ -93,6 +127,22 @@ public struct GameProfile: Codable, Sendable, Equatable {
         return copy
     }
 
+    public func isFixEnabled(_ id: String) -> Bool {
+        !disabledFixes.contains(id)
+    }
+
+    /// DLL overrides that are actually applied after the fix switches.
+    public var effectiveDllOverrides: [String: String] {
+        guard gameFixesEnabled else { return [:] }
+        return dllOverrides.filter { isFixEnabled(RuntimeFix.dllID($0.key)) }
+    }
+
+    /// Extra environment flags that are actually applied after the fix switches.
+    public var effectiveEnvironment: [String: String] {
+        guard gameFixesEnabled else { return [:] }
+        return extraEnvironment.filter { isFixEnabled(RuntimeFix.envID($0.key)) }
+    }
+
     public func buildLaunchEnvironment(runnerRoot: URL, prefixRoot: URL) -> [String: String] {
         let clean = sanitized()
         let rootPath = runnerRoot.path(percentEncoded: false)
@@ -102,6 +152,9 @@ public struct GameProfile: Codable, Sendable, Equatable {
             "WINEPREFIX": pfxPath,
             "CX_ROOT": rootPath,
             "CX_GRAPHICS_BACKEND": clean.graphics.rawValue,
+            "NOTPROTON_FULLSCREEN": clean.fullscreenMode ? "1" : "0",
+            "POSITRON_GAME_FIXES": clean.gameFixesEnabled ? "1" : "0",
+            "POSITRON_DISABLED_FIXES": " \(clean.disabledFixes.sorted().joined(separator: " ")) ",
             "WINEDEBUG": "-all",
             "SteamAppId": String(clean.appID),
             "SteamGameId": String(clean.appID)
@@ -140,12 +193,12 @@ public struct GameProfile: Codable, Sendable, Equatable {
             "steamclient64=n",
             "lsteamclient=b"
         ]
-        for (dll, mode) in clean.dllOverrides.sorted(by: { $0.key < $1.key }) {
+        for (dll, mode) in clean.effectiveDllOverrides.sorted(by: { $0.key < $1.key }) {
             overrides.append("\(dll)=\(mode)")
         }
         env["WINEDLLOVERRIDES"] = overrides.joined(separator: ";")
 
-        for (k, v) in clean.extraEnvironment {
+        for (k, v) in clean.effectiveEnvironment {
             env[k] = v
         }
         return env
@@ -175,7 +228,15 @@ public struct GameProfile: Codable, Sendable, Equatable {
         let clean = sanitized()
         var parts: [String] = []
         parts.append("CX_GRAPHICS_BACKEND=\(clean.graphics.rawValue)")
-        parts.append("WINEMSYNC=\(clean.sync == .msync ? "1" : "0")")
+        switch clean.sync {
+        case .msync:
+            parts.append("WINEMSYNC=1")
+        case .esync:
+            parts.append("WINEMSYNC=0")
+            parts.append("WINEESYNC=1")
+        case .none:
+            parts.append("WINEMSYNC=0")
+        }
         if clean.translator == .fex {
             parts.append("FEX_X87REDUCEDPRECISION=\(clean.fexReducedPrecision ? "1" : "0")")
         } else if clean.advertiseAVX {
@@ -193,6 +254,9 @@ public struct GameProfile: Codable, Sendable, Equatable {
         if clean.disableHidraw {
             parts.append("NOTPROTON_DISABLE_HIDRAW=1")
         }
+        for (k, v) in clean.effectiveEnvironment.sorted(by: { $0.key < $1.key }) {
+            parts.append("\(k)=\(v)")
+        }
         return parts.joined(separator: " ") + " %command%"
     }
 
@@ -200,14 +264,26 @@ public struct GameProfile: Codable, Sendable, Equatable {
         let clean = sanitized()
         var lines: [String] = [
             "# Positron auto-generated game profile for AppID \(clean.appID)",
-            "export CX_GRAPHICS_BACKEND=\"\(clean.graphics.rawValue)\"",
-            "export WINEMSYNC=\"\(clean.sync == .msync ? "1" : "0")\""
+            "export POSITRON_TRANSLATOR=\"\(clean.translator.rawValue)\"",
+            "export CX_GRAPHICS_BACKEND=\"\(clean.graphics.rawValue)\""
         ]
+        switch clean.sync {
+        case .msync:
+            lines.append("export WINEMSYNC=\"1\"")
+        case .esync:
+            lines.append("export WINEMSYNC=\"0\"")
+            lines.append("export WINEESYNC=\"1\"")
+        case .none:
+            lines.append("export WINEMSYNC=\"0\"")
+        }
         if clean.translator == .fex {
             lines.append("export FEX_X87REDUCEDPRECISION=\"\(clean.fexReducedPrecision ? "1" : "0")\"")
         } else {
             lines.append("export ROSETTA_ADVERTISE_AVX=\"\(clean.advertiseAVX ? "1" : "0")\"")
         }
+        lines.append("export NOTPROTON_FULLSCREEN=\"\(clean.fullscreenMode ? "1" : "0")\"")
+        lines.append("export POSITRON_GAME_FIXES=\"\(clean.gameFixesEnabled ? "1" : "0")\"")
+        lines.append("export POSITRON_DISABLED_FIXES=\" \(clean.disabledFixes.sorted().joined(separator: " ")) \"")
         lines.append("export NOTPROTON_RETINA=\"\(clean.retinaMode ? "1" : "0")\"")
         if clean.metalHUD {
             lines.append("export MTL_HUD_ENABLED=\"1\"")
@@ -218,9 +294,12 @@ public struct GameProfile: Codable, Sendable, Equatable {
         if clean.disableHidraw {
             lines.append("export NOTPROTON_DISABLE_HIDRAW=\"1\"")
         }
-        if !clean.dllOverrides.isEmpty {
-            let ov = clean.dllOverrides.sorted(by: { $0.key < $1.key }).map { "\($0.key)=\($0.value)" }.joined(separator: ";")
+        if !clean.effectiveDllOverrides.isEmpty {
+            let ov = clean.effectiveDllOverrides.sorted(by: { $0.key < $1.key }).map { "\($0.key)=\($0.value)" }.joined(separator: ";")
             lines.append("export WINEDLLOVERRIDES=\"\(ov);${WINEDLLOVERRIDES:-}\"")
+        }
+        for (k, v) in clean.effectiveEnvironment.sorted(by: { $0.key < $1.key }) {
+            lines.append("export \(k)=\"\(v)\"")
         }
         return lines.joined(separator: "\n") + "\n"
     }
@@ -235,12 +314,32 @@ public enum GameQuirksDatabase {
         1086940  // Baldur's Gate 3 (Native macOS port)
     ]
 
-    /// Comprehensive 50-game library of Windows-only Steam games with best-known Positron profiles.
-    public static let catalog: [GamePresetInfo] = [
-        GamePresetInfo(appID: 292030, title: "The Witcher 3: Wild Hunt — Remastered", subtitle: "REDengine 3 • 64-bit DirectX 12 & DirectX 11", recommendedSummary: "Rosetta 2 + D3DMetal (DX12) + Msync + AVX", notes: "Uses D3DMetal for the Next-Gen DirectX 12 executable (bin/x64_dx12/witcher3.exe) with AVX and native VC++ runtime overrides."),
-        GamePresetInfo(appID: 1151340, title: "Fallout 76", subtitle: "Creation Engine • 64-bit DirectX 11 Online", recommendedSummary: "Rosetta 2 + DXMT (DX11) + XAudio2 Fix", notes: "Uses DXMT for low-stutter DirectX 11 translation and native xaudio2_7 + vcruntime140 overrides so audio and Bethesda.net login work cleanly."),
+    /// Hand-tuned presets plus engine-based presets for popular Windows-only titles.
+    public static let catalog: [GamePresetInfo] = {
+        let curatedIDs = Set(curatedCatalog.map(\.appID))
+        let engine = enginePresetSpecs
+            .filter { !curatedIDs.contains($0.appID) && !knownNativeMacAppIDs.contains($0.appID) }
+            .map(\.info)
+        return curatedCatalog + engine
+    }()
+
+    private static let enginePresetByID: [UInt32: EnginePresetSpec] = Dictionary(
+        enginePresetSpecs.map { ($0.appID, $0) },
+        uniquingKeysWith: { first, _ in first }
+    )
+
+    /// True when the preset was tuned and tested for this specific game (not derived from its engine).
+    public static func isHandTuned(_ appID: UInt32) -> Bool {
+        knownQuirks[appID] != nil
+    }
+
+    /// Presets tuned per game.
+    private static let curatedCatalog: [GamePresetInfo] = [
+        GamePresetInfo(appID: 292030, title: "The Witcher 3: Wild Hunt — Remastered", subtitle: "REDengine 3 • 64-bit DirectX 12 (Patch 5.0+)", recommendedSummary: "Rosetta 2 + D3DMetal (DX12) + Stream-Output PSO & SDR Fix", notes: "Automatically links bin/x64 -> x64_dx12, stages the stream-output PSO skip proxy (amd_fidelityfx_loader_dx12.dll) and SDR DXGI hook (dinput8.dll), bypasses REDprelauncher.exe, and disables winspool.drv."),
+        GamePresetInfo(appID: 1151340, title: "Fallout 76", subtitle: "Creation Engine • 64-bit DirectX 11 Online", recommendedSummary: "Rosetta 2 / FEX + DXMT (DX11) + XAudio2 & Borderless Fix", notes: "Uses DXMT for low-stutter DirectX 11 translation (preventing Fallout76.exe's bundled libcef.dll from forcing WineD3D) and native xaudio2_7 + vcruntime140 overrides."),
+        GamePresetInfo(appID: 668580, title: "Atomic Heart", subtitle: "Unreal Engine 4 • 64-bit DirectX 12 / 11", recommendedSummary: "Rosetta 2 + D3DMetal (DX12) + AVX + XAudio2", notes: "Uses Rosetta 2 with AVX and D3DMetal for Unreal Engine 4 DirectX 12 rendering, plus native xaudio2_9 and VC++ runtime overrides."),
         GamePresetInfo(appID: 3105440, title: "Heroes of Might and Magic: Olden Era", subtitle: "Unity 6 Engine • 64-bit DirectX 11 + Media Foundation Video", recommendedSummary: "Rosetta 2 + D3DMetal + Standard DPI + Internal APFS Prefix", notes: "Uses D3DMetal on Rosetta 2 so IDXGIResource::GetSharedHandle and D3D11Fence work for .mp4 intro/campaign videos, while purging exFAT ._* files and keeping Retina scaling off."),
-        GamePresetInfo(appID: 1174180, title: "Red Dead Redemption 2", subtitle: "RAGE Engine • 64-bit DirectX 12 / Vulkan", recommendedSummary: "Rosetta 2 + D3DMetal (DX12) + AVX", notes: "Enables Rosetta AVX instruction advertising and D3DMetal for RDR2.exe and Rockstar Games Launcher stability."),
+        GamePresetInfo(appID: 1174180, title: "Red Dead Redemption 2", subtitle: "RAGE Engine • 64-bit DirectX 12 / Vulkan", recommendedSummary: "Rosetta 2 + D3DMetal (DX12) + Anti-Flicker / SDR / TAA Fix", notes: "Disables D3DMetal DLSS-to-MetalFX (nvngx=d, D3DM_ENABLE_METALFX=0) and clamps NaN/Inf shader samples to eliminate 3D world blinking, while configuring system.xml for DX12 SDR Windowed Borderless with TAA High."),
         GamePresetInfo(appID: 1286830, title: "STAR WARS: The Old Republic", subtitle: "HeroEngine • 32-bit CEF Launcher -> 64-bit Retail Client", recommendedSummary: "Rosetta 2 (WoW64) + WineD3D + CEF Launcher Fix", notes: "Uses Rosetta 2 + WineD3D and appends --disable-gpu --disable-gpu-compositing to launcher.exe (libcef.dll) so the launcher window renders visibly without a cross-process D3D11 swapchain."),
         GamePresetInfo(appID: 323190, title: "Frostpunk", subtitle: "Liquid Engine • 64-bit DirectX 11", recommendedSummary: "FEX ARM64 / Rosetta + DXMT (DX11) + Msync", notes: "Uses DXMT for fast native Metal DirectX 11 rendering on Frostpunk.exe with vcruntime140 and d3dcompiler_47 overrides."),
         GamePresetInfo(appID: 38410, title: "Fallout 2", subtitle: "Fallout Engine (32-bit i386) • DirectDraw + High-Res Patch", recommendedSummary: "Rosetta 2 (32-bit) + ddraw=n,b (sfall / High-Res Patch)", notes: "Forces native ddraw.dll (ddraw=n,b) so Fallout 2's bundled High-Resolution Patch (f2_res / sfall) loads instead of Wine's builtin DirectDraw."),
@@ -312,23 +411,28 @@ public enum GameQuirksDatabase {
 
     public static let knownQuirks: [UInt32: (title: String, apply: @Sendable (inout GameProfile) -> Void)] = [
         292030: ("The Witcher 3: Wild Hunt — Remastered", { profile in
-            if profile.translator == .rosetta { profile.graphics = .d3dMetal }
+            profile.translator = .rosetta
+            profile.graphics = .d3dMetal
             profile.advertiseAVX = true
             profile.sync = .msync
+            profile.dllOverrides["winspool.drv"] = "d"
+            profile.dllOverrides["dinput8"] = "n,b"
+            profile.dllOverrides["amd_fidelityfx_loader_dx12"] = "n,b"
             profile.dllOverrides["vcruntime140"] = "n,b"
             profile.dllOverrides["vcruntime140_1"] = "n,b"
             profile.dllOverrides["msvcp140"] = "n,b"
             profile.dllOverrides["d3dcompiler_47"] = "n,b"
         }),
         1151340: ("Fallout 76", { profile in
+            profile.translator = .rosetta
             profile.graphics = .dxmt
             profile.advertiseAVX = true
             profile.sync = .msync
             profile.dllOverrides["xaudio2_7"] = "n,b"
-            profile.dllOverrides["vcruntime140"] = "n,b"
-            profile.dllOverrides["vcruntime140_1"] = "n,b"
-            profile.dllOverrides["msvcp140"] = "n,b"
-            profile.dllOverrides["d3dcompiler_47"] = "n,b"
+        }),
+        668580: ("Atomic Heart", { profile in
+            dx12RosettaRule(&profile)
+            profile.dllOverrides["xaudio2_9"] = "n,b"
         }),
         3105440: ("Heroes of Might and Magic: Olden Era", { profile in
             profile.translator = .rosetta
@@ -343,9 +447,14 @@ public enum GameQuirksDatabase {
             profile.translator = .rosetta
             profile.graphics = .d3dMetal
             profile.advertiseAVX = true
+            profile.sync = .esync
+            profile.dllOverrides["nvngx"] = "d"
             profile.dllOverrides["vulkan-1"] = "n,b"
             profile.dllOverrides["vcruntime140"] = "n,b"
             profile.dllOverrides["d3dcompiler_47"] = "n,b"
+            profile.extraEnvironment["D3DM_ENABLE_METALFX"] = "0"
+            profile.extraEnvironment["D3DM_SAMPLE_NAN_TO_ZERO"] = "1"
+            profile.extraEnvironment["D3DM_FLUSH_POS_INF_TO_NAN"] = "1"
         }),
         1286830: ("STAR WARS: The Old Republic", { profile in
             profile.translator = .rosetta
@@ -441,27 +550,29 @@ public enum GameQuirksDatabase {
     }
 
     /// Loads user/community presets from ~/Library/Application Support/Positron/presets-catalog.json,
-    /// seeding the file with the built-in 50-game catalog on first use so users can add new games easily.
+    /// seeding the file with the built-in catalog on first use so users can add new games easily.
     public static func loadCustomCatalog(at url: URL = customCatalogURL) -> [PresetCatalogEntry] {
         let fm = FileManager.default
-        if let data = try? Data(contentsOf: url),
-           let decoded = try? JSONDecoder().decode([PresetCatalogEntry].self, from: data),
-           decoded.count >= catalog.count {
-            return decoded
-        }
-        let seeded = catalog.map { item in
+        let builtInIDs = Set(catalog.map(\.appID))
+        let builtInEntries = catalog.map { item in
             PresetCatalogEntry(
                 info: item,
                 recommendedProfile: builtInDefaultProfile(forAppID: item.appID, preferredTranslator: .rosetta)
             )
         }
+        var customOnly: [PresetCatalogEntry] = []
+        if let data = try? Data(contentsOf: url),
+           let decoded = try? JSONDecoder().decode([PresetCatalogEntry].self, from: data) {
+            customOnly = decoded.filter { !builtInIDs.contains($0.info.appID) }
+        }
+        let merged = builtInEntries + customOnly
         try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(seeded) {
+        if let data = try? encoder.encode(merged), (try? Data(contentsOf: url)) != data {
             try? data.write(to: url, options: .atomic)
         }
-        return seeded
+        return merged
     }
 
     /// Appends or updates a game preset entry inside ~/Library/Application Support/Positron/presets-catalog.json.
@@ -488,7 +599,7 @@ public enum GameQuirksDatabase {
 
     public static func builtInDefaultProfile(forAppID appID: UInt32, preferredTranslator: CPUTranslator = .rosetta) -> GameProfile {
         let forceRosettaIDs: Set<UInt32> = [
-            292030, 3105440, 1091500, 1174180, 1245620, 1286830, 38410, 412020,
+            292030, 1151340, 668580, 3105440, 1091500, 1174180, 1245620, 1286830, 38410, 412020,
             1716740, 1888160, 1363080, 1466860, 2215430, 2322010, 1151640, 2420110,
             1817070, 1817190, 1888930, 1771300, 1446780, 2246340, 2344520, 2694490,
             2358720, 2054970, 2050650, 1196590, 782330, 379720, 2161700, 2072450,
@@ -502,6 +613,8 @@ public enum GameQuirksDatabase {
         )
         if let quirk = knownQuirks[appID] {
             quirk.apply(&profile)
+        } else if let spec = enginePresetByID[appID] {
+            spec.path.apply(to: &profile)
         }
         return profile.sanitized()
     }

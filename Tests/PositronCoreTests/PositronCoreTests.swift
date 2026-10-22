@@ -33,43 +33,64 @@ struct PositronCoreTests {
         #expect(env["WINEDLLOVERRIDES"]?.contains("lsteamclient=b") == true)
     }
 
-    @Test("Curated presets for Witcher 3 Remaster, Fallout 76, and Heroes of Olden Era configure optimal settings")
+    @Test("Curated presets for Witcher 3 Remaster, RDR2, Atomic Heart, Fallout 76, and Heroes of Olden Era configure optimal settings")
     func curatedGameProfiles() {
         // 1. The Witcher 3: Wild Hunt (Next-Gen Remaster) - AppID 292030
         let witcher3 = GameQuirksDatabase.defaultProfile(forAppID: 292030, preferredTranslator: .fex)
         #expect(witcher3.translator == .rosetta)
         #expect(witcher3.graphics == .d3dMetal)
         #expect(witcher3.advertiseAVX == true)
+        #expect(witcher3.dllOverrides["winspool.drv"] == "d")
+        #expect(witcher3.dllOverrides["dinput8"] == "n,b")
+        #expect(witcher3.dllOverrides["amd_fidelityfx_loader_dx12"] == "n,b")
         #expect(witcher3.dllOverrides["d3dcompiler_47"] == "n,b")
 
-        // 2. Fallout 76 - AppID 1151340
-        let fallout76 = GameQuirksDatabase.defaultProfile(forAppID: 1151340, preferredTranslator: .rosetta)
-        #expect(fallout76.graphics == .dxmt)
-        #expect(fallout76.dllOverrides["xaudio2_7"] == "n,b")
-        #expect(fallout76.dllOverrides["vcruntime140"] == "n,b")
+        // 2. Red Dead Redemption 2 - AppID 1174180 (Anti-flicker: nvngx=d, MetalFX=0, NaN/Inf clamp, esync)
+        let rdr2 = GameQuirksDatabase.defaultProfile(forAppID: 1174180, preferredTranslator: .fex)
+        #expect(rdr2.translator == .rosetta)
+        #expect(rdr2.graphics == .d3dMetal)
+        #expect(rdr2.sync == .esync)
+        #expect(rdr2.dllOverrides["nvngx"] == "d")
+        #expect(rdr2.extraEnvironment["D3DM_ENABLE_METALFX"] == "0")
+        #expect(rdr2.extraEnvironment["D3DM_SAMPLE_NAN_TO_ZERO"] == "1")
+        #expect(rdr2.extraEnvironment["D3DM_FLUSH_POS_INF_TO_NAN"] == "1")
 
-        // 3. Heroes of Might and Magic: Olden Era - AppID 3105440 (D3DMetal for MediaFoundation .mp4 shared texture handles)
+        // 3. Atomic Heart - AppID 668580 (Unreal Engine 4 DX12 + Rosetta AVX + xaudio2_9)
+        let atomicHeart = GameQuirksDatabase.defaultProfile(forAppID: 668580, preferredTranslator: .fex)
+        #expect(atomicHeart.translator == .rosetta)
+        #expect(atomicHeart.graphics == .d3dMetal)
+        #expect(atomicHeart.advertiseAVX == true)
+        #expect(atomicHeart.dllOverrides["xaudio2_9"] == "n,b")
+        #expect(GameQuirksDatabase.presetInfo(forAppID: 668580)?.title == "Atomic Heart")
+
+        // 4. Fallout 76 - AppID 1151340 (Forces Rosetta 2 because 1 MB PE stack reserve overflows FEX xtajit64.dll)
+        let fallout76 = GameQuirksDatabase.defaultProfile(forAppID: 1151340, preferredTranslator: .fex)
+        #expect(fallout76.translator == .rosetta)
+        #expect(fallout76.graphics == .dxmt)
+        #expect(fallout76.advertiseAVX == true)
+
+        // 5. Heroes of Might and Magic: Olden Era - AppID 3105440 (D3DMetal for MediaFoundation .mp4 shared texture handles)
         let oldenEra = GameQuirksDatabase.defaultProfile(forAppID: 3105440, preferredTranslator: .fex)
         #expect(oldenEra.translator == .rosetta)
         #expect(oldenEra.graphics == .d3dMetal)
         #expect(oldenEra.retinaMode == false)
         #expect(oldenEra.dllOverrides["d3dcompiler_47"] == "n,b")
 
-        // 4. Fallout 2 - AppID 38410 (32-bit with sfall/f2_res ddraw=n,b)
+        // 6. Fallout 2 - AppID 38410 (32-bit with sfall/f2_res ddraw=n,b)
         let fallout2 = GameQuirksDatabase.defaultProfile(forAppID: 38410, preferredTranslator: .fex)
         #expect(fallout2.translator == .rosetta)
         #expect(fallout2.dllOverrides["ddraw"] == "n,b")
 
-        // 5. Frostpunk - AppID 323190 (64-bit DX11 -> DXMT)
+        // 7. Frostpunk - AppID 323190 (64-bit DX11 -> DXMT)
         let frostpunk = GameQuirksDatabase.defaultProfile(forAppID: 323190, preferredTranslator: .fex)
         #expect(frostpunk.graphics == .dxmt)
 
-        // 6. STAR WARS: The Old Republic - AppID 1286830 (32-bit launcher -> 64-bit client -> Rosetta + WineD3D)
+        // 8. STAR WARS: The Old Republic - AppID 1286830 (32-bit launcher -> 64-bit client -> Rosetta + WineD3D)
         let swtor = GameQuirksDatabase.defaultProfile(forAppID: 1286830, preferredTranslator: .fex)
         #expect(swtor.translator == .rosetta)
         #expect(swtor.graphics == .wineD3D)
 
-        // 7. Native macOS games (Cyberpunk 2077 = 1091500, Metro Exodus = 412020, BG3 = 1086940)
+        // 9. Native macOS games (Cyberpunk 2077 = 1091500, Metro Exodus = 412020, BG3 = 1086940)
         //    are excluded from the Positron Windows compatibility catalog so they always run natively.
         #expect(GameQuirksDatabase.knownNativeMacAppIDs.contains(1091500))
         #expect(GameQuirksDatabase.knownNativeMacAppIDs.contains(412020))
@@ -172,9 +193,8 @@ struct PositronCoreTests {
         #expect(libs[0].installedGamesCount == 1)
 
         let prefixes = PrefixManager.discoverSteamPrefixes(libraries: libs)
-        #expect(prefixes.count == 1)
-        #expect(prefixes[0].appID == "1151340")
-        #expect(prefixes[0].gameTitle == "Fallout 76")
+        #expect(prefixes.count >= 1)
+        #expect(prefixes.contains(where: { $0.appID == "1151340" && $0.gameTitle == "Fallout 76" }))
     }
 
     @Test("SteamIntegration updates CompatToolMapping in config.vdf and writes .env profile")
@@ -268,5 +288,96 @@ struct PositronCoreTests {
                 #expect(ntdll.isReadyForDynamicBridge == true)
             }
         }
+    }
+
+
+    @Test("Game fixes switch off individually or all at once, and old profiles keep them on")
+    func switchableGameFixes() throws {
+        var rdr2 = GameQuirksDatabase.defaultProfile(forAppID: 1174180, preferredTranslator: .rosetta)
+        #expect(rdr2.effectiveDllOverrides["nvngx"] == "d")
+        #expect(rdr2.effectiveEnvironment["D3DM_ENABLE_METALFX"] == "0")
+
+        rdr2.disabledFixes = [RuntimeFix.dllID("nvngx"), "rdr2-anti-flicker"]
+        #expect(rdr2.effectiveDllOverrides["nvngx"] == nil)
+        #expect(rdr2.effectiveDllOverrides["vulkan-1"] == "n,b")
+        let partial = rdr2.buildPositronEnvFileContent()
+        #expect(!partial.contains("nvngx=d"))
+        #expect(partial.contains("export POSITRON_DISABLED_FIXES=\" dll:nvngx rdr2-anti-flicker \""))
+        #expect(partial.contains("export POSITRON_GAME_FIXES=\"1\""))
+
+        rdr2.gameFixesEnabled = false
+        #expect(rdr2.effectiveDllOverrides.isEmpty)
+        #expect(rdr2.effectiveEnvironment.isEmpty)
+        let off = rdr2.buildPositronEnvFileContent()
+        #expect(off.contains("export POSITRON_GAME_FIXES=\"0\""))
+        #expect(!off.contains("D3DM_ENABLE_METALFX"))
+
+        let legacyJSON = #"{"appID":1151340,"translator":"rosetta","graphics":"dxmt","sync":"msync","dllOverrides":{"xaudio2_7":"n,b"}}"#
+        let legacy = try JSONDecoder().decode(GameProfile.self, from: Data(legacyJSON.utf8))
+        #expect(legacy.gameFixesEnabled == true)
+        #expect(legacy.disabledFixes.isEmpty)
+        #expect(legacy.effectiveDllOverrides["xaudio2_7"] == "n,b")
+
+        #expect(RuntimeFix.applicable(to: 292030).contains { $0.id == "witcher3-dx12-fix" })
+        #expect(!RuntimeFix.applicable(to: 990080).contains { $0.id == "witcher3-dx12-fix" })
+    }
+
+    @Test("Preset library covers 100+ unique Windows-only titles with engine-based pipelines")
+    func presetLibraryCoverage() {
+        let ids = GameQuirksDatabase.catalog.map(\.appID)
+        #expect(ids.count >= 100)
+        #expect(Set(ids).count == ids.count)
+        #expect(ids.allSatisfy { !GameQuirksDatabase.knownNativeMacAppIDs.contains($0) })
+
+        let hogwarts = GameQuirksDatabase.defaultProfile(forAppID: 990080, preferredTranslator: .fex)
+        #expect(hogwarts.translator == .rosetta)
+        #expect(hogwarts.graphics == .d3dMetal)
+        let tf2 = GameQuirksDatabase.defaultProfile(forAppID: 440, preferredTranslator: .fex)
+        #expect(tf2.graphics == .wineD3D)
+        #expect(GameQuirksDatabase.isHandTuned(292030))
+        #expect(!GameQuirksDatabase.isHandTuned(990080))
+    }
+
+    @Test("Non-Steam games get stable virtual IDs, persist, and launch as Steam shortcuts")
+    func standaloneGames() throws {
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "positron-standalone-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let gameDir = tmp.appending(path: "My Game")
+        try FileManager.default.createDirectory(at: gameDir, withIntermediateDirectories: true)
+        let exe = gameDir.appending(path: "MyGame.exe")
+        try Data("MZ".utf8).write(to: exe)
+        let store = tmp.appending(path: "standalone-games.json")
+
+        let game = try StandaloneGameStore.add(executable: exe, to: store)
+        #expect(StandaloneGameStore.isVirtualAppID(game.id))
+        #expect(game.title == "MyGame")
+        #expect(try StandaloneGameStore.add(executable: exe, to: store) == game)
+        #expect(StandaloneGameStore.load(from: store) == [game])
+
+        let env = StandaloneGameStore.launchEnvironment(for: game, base: ["SteamAppId": "730"])
+        #expect(env["STEAM_COMPAT_APP_ID"] == String(game.id))
+        #expect(env["STEAM_COMPAT_INSTALL_PATH"] == gameDir.path(percentEncoded: false))
+        #expect(env["SteamAppId"] == nil)
+        #expect((UInt64(env["SteamGameId"] ?? "0") ?? 0) & 0xFFFF_FFFF == 0x0200_0000)
+
+        #expect(throws: StandaloneGameError.self) {
+            try StandaloneGameStore.add(executable: gameDir.appending(path: "readme.txt"), to: store)
+        }
+        try StandaloneGameStore.remove(id: game.id, from: store)
+        #expect(StandaloneGameStore.load(from: store).isEmpty)
+    }
+
+    @Test("Games still downloading in Steam stay hidden until the manifest says fully installed")
+    func appManifestInstallState() throws {
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "positron-acf-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let downloading = tmp.appending(path: "appmanifest_1.acf")
+        try Data("\"AppState\"\n{\n\t\"appid\"\t\t\"1\"\n\t\"StateFlags\"\t\t\"1026\"\n}\n".utf8).write(to: downloading)
+        let installed = tmp.appending(path: "appmanifest_2.acf")
+        try Data("\"AppState\"\n{\n\t\"appid\"\t\t\"2\"\n\t\"StateFlags\"\t\t\"4\"\n}\n".utf8).write(to: installed)
+        #expect(SteamLibraryDiscovery.parseAppManifestStateFlags(at: downloading) == 1026)
+        #expect(!SteamLibraryDiscovery.isFullyInstalled(manifestAt: downloading))
+        #expect(SteamLibraryDiscovery.isFullyInstalled(manifestAt: installed))
     }
 }

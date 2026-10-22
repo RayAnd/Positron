@@ -87,35 +87,35 @@ $(STEAM_BRIDGE_ARM64): $(DOBBY_DIR)/libdobby.a $(OUT_DIR)/generated/compat_run.h
 		-framework CoreFoundation -framework CoreGraphics -lc++ \
 		-o $@ \
 		steam-bridge/engine/core/loader.c \
-	steam-bridge/engine/core/macho.c \
-	steam-bridge/engine/resolver/anchor.c \
-	steam-bridge/engine/resolver/aob.c \
-	steam-bridge/engine/resolver/resolver.c \
-	steam-bridge/engine/resolver/sigdb.c \
-	steam-bridge/engine/util/log.c \
-	steam-bridge/engine/util/file.c \
-	steam-bridge/engine/util/peicon.c \
-	steam-bridge/engine/hooks/hooks.c \
-	steam-bridge/engine/hooks/hook_compat.c \
-	steam-bridge/engine/hooks/hook_shortcut.c \
-	steam-bridge/engine/hooks/hook_icon.c \
-	steam-bridge/engine/hooks/hook_shortcut_bundle.c \
-	steam-bridge/engine/hooks/hook_webui.c \
-	steam-bridge/engine/hooks/hook_webpatch.c \
-	steam-bridge/engine/hooks/hook_spawn.c \
-	steam-bridge/engine/hooks/hook_launch.c \
-	steam-bridge/engine/hooks/hook_activate.c \
-	steam-bridge/engine/feats/compat.c \
-	steam-bridge/engine/feats/webui.c \
-	steam-bridge/engine/feats/compatsvc.c \
-	steam-bridge/engine/feats/usershortcuts.c \
-	steam-bridge/engine/feats/webpatch.c \
-	steam-bridge/engine/feats/nativeplatform.c \
-	steam-bridge/engine/feats/input_access.c \
-	steam-bridge/vendor/cJSON.c \
-	steam-bridge/src/mp_macho.c \
-	steam-bridge/src/mp_resolver.c \
-	steam-bridge/src/mp_web_inject.c \
+		steam-bridge/engine/core/macho.c \
+		steam-bridge/engine/resolver/anchor.c \
+		steam-bridge/engine/resolver/aob.c \
+		steam-bridge/engine/resolver/resolver.c \
+		steam-bridge/engine/resolver/sigdb.c \
+		steam-bridge/engine/util/log.c \
+		steam-bridge/engine/util/file.c \
+		steam-bridge/engine/util/peicon.c \
+		steam-bridge/engine/hooks/hooks.c \
+		steam-bridge/engine/hooks/hook_compat.c \
+		steam-bridge/engine/hooks/hook_shortcut.c \
+		steam-bridge/engine/hooks/hook_icon.c \
+		steam-bridge/engine/hooks/hook_shortcut_bundle.c \
+		steam-bridge/engine/hooks/hook_webui.c \
+		steam-bridge/engine/hooks/hook_webpatch.c \
+		steam-bridge/engine/hooks/hook_spawn.c \
+		steam-bridge/engine/hooks/hook_launch.c \
+		steam-bridge/engine/hooks/hook_activate.c \
+		steam-bridge/engine/feats/compat.c \
+		steam-bridge/engine/feats/webui.c \
+		steam-bridge/engine/feats/compatsvc.c \
+		steam-bridge/engine/feats/usershortcuts.c \
+		steam-bridge/engine/feats/webpatch.c \
+		steam-bridge/engine/feats/nativeplatform.c \
+		steam-bridge/engine/feats/input_access.c \
+		steam-bridge/vendor/cJSON.c \
+		steam-bridge/src/mp_macho.c \
+		steam-bridge/src/mp_resolver.c \
+		steam-bridge/src/mp_web_inject.c \
 		$(DOBBY_LIBS)
 
 $(STEAM_BRIDGE_X86): steam-bridge/engine/stub_x86_64.c | $(OUT_DIR)
@@ -150,7 +150,7 @@ swift-build:
 
 app: $(STEAM_BRIDGE_DYLIB) $(SUPERVISOR_BIN) swift-build
 	@rm -rf "$(APP_BUNDLE)"
-	@mkdir -p "$(APP_BUNDLE)/Contents/MacOS" "$(APP_BUNDLE)/Contents/Resources/signatures/macos.arm64"
+	@mkdir -p "$(APP_BUNDLE)/Contents/MacOS" "$(APP_BUNDLE)/Contents/Resources/signatures/macos.arm64" "$(APP_BUNDLE)/Contents/Resources/fixes/witcher3"
 	@BIN_PATH=$$(swift build -c release --show-bin-path); \
 		cp "$$BIN_PATH/PositronApp" "$(APP_BUNDLE)/Contents/MacOS/PositronApp"; \
 		cp "$$BIN_PATH/positron" "$(APP_BUNDLE)/Contents/Resources/positron"
@@ -161,6 +161,7 @@ app: $(STEAM_BRIDGE_DYLIB) $(SUPERVISOR_BIN) swift-build
 	@cp "THIRD_PARTY_NOTICES.md" "$(APP_BUNDLE)/Contents/Resources/THIRD_PARTY_NOTICES.md"
 	@cp "steam-bridge/engine/feats/compat_run.sh" "$(APP_BUNDLE)/Contents/Resources/run"
 	@cp Resources/signatures/macos.arm64/*.json "$(APP_BUNDLE)/Contents/Resources/signatures/macos.arm64/"
+	@cp Resources/fixes/witcher3/* "$(APP_BUNDLE)/Contents/Resources/fixes/witcher3/"
 	@chmod +x "$(APP_BUNDLE)/Contents/MacOS/PositronApp" \
 		"$(APP_BUNDLE)/Contents/Resources/positron-run" \
 		"$(APP_BUNDLE)/Contents/Resources/positron"

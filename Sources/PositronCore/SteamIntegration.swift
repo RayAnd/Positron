@@ -74,6 +74,50 @@ public enum SteamIntegration {
         steamSupportDir.appending(path: "steam.cfg")
     }
 
+    public static var deployedBridgeRecordURL: URL {
+        positronSupportDir.appending(path: "bin/deployed-positron-steam.dylib")
+    }
+
+    public static func isSteamRunning() -> Bool {
+        let check = Process()
+        check.executableURL = URL(filePath: "/usr/bin/pgrep")
+        check.arguments = ["-x", "steam_osx"]
+        try? check.run()
+        check.waitUntilExit()
+        return check.terminationStatus == 0
+    }
+
+    /// Returns true if Positron is integrated into Steam.app but the bundled positron-steam.dylib
+    /// inside Positron.app is newer/different than the last dylib deployed into Steam.app.
+    public static func isBridgeUpdatePending(
+        steamApp: URL = defaultSteamApp,
+        resourceURL: URL? = Bundle.main.resourceURL
+    ) -> Bool {
+        guard inspectState(steamApp: steamApp).isPositronInjected,
+              let res = resourceURL else { return false }
+        let bundledDylib = res.appending(path: "positron-steam.dylib")
+        guard let bundledData = try? Data(contentsOf: bundledDylib) else { return false }
+        guard let deployedData = try? Data(contentsOf: deployedBridgeRecordURL) else { return true }
+        return bundledData != deployedData
+    }
+
+    /// If Positron is enabled in Steam and Steam is currently closed, silently updates
+    /// Steam.app's positron-steam.dylib and compatibilitytools.d scripts in the background.
+    @discardableResult
+    public static func autoUpdateSteamBridgeIfClosed(
+        runners: [DiscoveredRunner],
+        steamApp: URL = defaultSteamApp
+    ) -> Bool {
+        guard inspectState(steamApp: steamApp).isPositronInjected,
+              isBridgeUpdatePending(steamApp: steamApp),
+              !isSteamRunning() else {
+            return false
+        }
+        let blocked = isSteamUpdateBlocked()
+        _ = try? installIntoSteam(runners: runners, steamApp: steamApp, blockUpdates: blocked)
+        return !isBridgeUpdatePending(steamApp: steamApp)
+    }
+
     public static func inspectState(
         steamApp: URL = defaultSteamApp,
         compatToolsRoot: URL = steamCompatToolsDir
@@ -160,6 +204,16 @@ public enum SteamIntegration {
                     let target = dstSigs.appending(path: sig.lastPathComponent)
                     try? fm.removeItem(at: target)
                     try? fm.copyItem(at: sig, to: target)
+                }
+            }
+            let srcFixes = res.appending(path: "fixes/witcher3")
+            let dstFixes = supportDir.appending(path: "fixes/witcher3")
+            if let fixFiles = try? fm.contentsOfDirectory(at: srcFixes, includingPropertiesForKeys: nil) {
+                try fm.createDirectory(at: dstFixes, withIntermediateDirectories: true)
+                for fix in fixFiles {
+                    let target = dstFixes.appending(path: fix.lastPathComponent)
+                    try? fm.removeItem(at: target)
+                    try? fm.copyItem(at: fix, to: target)
                 }
             }
         }
@@ -281,6 +335,8 @@ public enum SteamIntegration {
         let deployedDylib = steamApp.appending(path: "Contents/MacOS/positron-steam.dylib")
         try? fm.removeItem(at: deployedDylib)
         try fm.copyItem(at: staged.dylib, to: deployedDylib)
+        try? fm.removeItem(at: deployedBridgeRecordURL)
+        try? fm.copyItem(at: staged.dylib, to: deployedBridgeRecordURL)
 
         let plistURL = steamApp.appending(path: "Contents/Info.plist")
         let backupURL = positronSupportDir.appending(path: "backups/Info.plist.stock")
@@ -387,16 +443,19 @@ public enum SteamIntegration {
 
     public static func restartSteamIfRunning(steamApp: URL = defaultSteamApp) {
         registerWithLaunchServices(steamApp: steamApp)
-        let check = Process()
-        check.executableURL = URL(filePath: "/usr/bin/pgrep")
-        check.arguments = ["-x", "steam_osx"]
-        try? check.run()
-        check.waitUntilExit()
-        guard check.terminationStatus == 0 else { return }
+        guard isSteamRunning() else { return }
 
-        _ = try? Process.run(URL(filePath: "/usr/bin/pkill"), arguments: ["-9", "-x", "steam_osx"])
-        _ = try? Process.run(URL(filePath: "/usr/bin/pkill"), arguments: ["-9", "-f", "Steam.AppBundle/Steam"])
-        Thread.sleep(forTimeInterval: 1.0)
+        // Ask Steam to exit cleanly first (SIGTERM), then finish any stragglers after a short grace period.
+        _ = try? Process.run(URL(filePath: "/usr/bin/pkill"), arguments: ["-TERM", "-x", "steam_osx"])
+        for _ in 0..<12 {
+            if !isSteamRunning() { break }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        if isSteamRunning() {
+            _ = try? Process.run(URL(filePath: "/usr/bin/pkill"), arguments: ["-9", "-x", "steam_osx"])
+            _ = try? Process.run(URL(filePath: "/usr/bin/pkill"), arguments: ["-9", "-f", "Steam.AppBundle/Steam"])
+            Thread.sleep(forTimeInterval: 0.8)
+        }
         _ = try? Process.run(URL(filePath: "/usr/bin/open"), arguments: [steamApp.path(percentEncoded: false)])
     }
 
@@ -405,6 +464,20 @@ public enum SteamIntegration {
     /// 2. Updates CompatToolMapping in ~/Library/Application Support/Steam/config/config.vdf
     /// 3. Enqueues <appid>\t<toolName> in ~/Library/Application Support/Positron/pending-apply.tsv
     ///    so a running Steam instance immediately updates CCompatManager and the Steam UI!
+    /// Ensures bundled runtime scripts (compat_run.sh) and game-fix DLLs (e.g. fixes/witcher3)
+    /// from Positron.app/Contents/Resources are always staged into ~/Library/Application Support/Positron
+    /// and ~/Library/Application Support/Steam/compatibilitytools.d.
+    public static func syncBundledFixesAndTools(runners: [DiscoveredRunner]) {
+        guard Bundle.main.resourceURL != nil else { return }
+        if let staged = try? stageRuntimeBinaries() {
+            _ = try? registerCompatibilityTools(
+                for: runners,
+                in: steamCompatToolsDir,
+                supervisorBinaryPath: staged.supervisor.path(percentEncoded: false)
+            )
+        }
+    }
+
     @discardableResult
     public static func applyProfileToSteam(
         _ profile: GameProfile,
@@ -412,6 +485,7 @@ public enum SteamIntegration {
         profileStore: GameProfileStore,
         configVDFURL: URL = steamSupportDir.appending(path: "config/config.vdf")
     ) throws -> String {
+        syncBundledFixesAndTools(runners: runners)
         let sanitized = profile.sanitized()
         try profileStore.save(sanitized)
         let toolName = sanitized.resolvedCompatToolName(among: runners)
@@ -557,5 +631,29 @@ public enum SteamIntegration {
             try runCodesign(steamOSX)
         }
         try runCodesign(steamApp)
+    }
+}
+
+public struct PositronFundingConfig: Codable, Sendable, Equatable {
+    public var kofiURL: String
+    public var githubSponsorsURL: String
+    public var githubRepoURL: String
+
+    public static let defaultConfig = PositronFundingConfig(
+        kofiURL: "https://ko-fi.com/rayand",
+        githubSponsorsURL: "https://github.com/sponsors/RayAnd",
+        githubRepoURL: "https://github.com/RayAnd/Positron"
+    )
+
+    public static var configFileURL: URL {
+        SteamIntegration.positronSupportDir.appending(path: "funding.json")
+    }
+
+    public static func current() -> PositronFundingConfig {
+        if let data = try? Data(contentsOf: configFileURL),
+           let decoded = try? JSONDecoder().decode(PositronFundingConfig.self, from: data) {
+            return decoded
+        }
+        return defaultConfig
     }
 }

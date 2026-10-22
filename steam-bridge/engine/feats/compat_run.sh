@@ -20,6 +20,17 @@ esac
 np_support="$HOME/Library/Application Support/Positron"
 iconmaker="$np_support/iconmaker"
 
+# Positron fix switches, set per game in Positron.app and exported by profiles/<appid>.env.
+# POSITRON_DISABLED_FIXES lists fix ids that are off; POSITRON_GAME_FIXES=0 turns off every
+# game-specific fix while the global safeguards keep their own switches.
+fix_on() {
+  case " ${POSITRON_DISABLED_FIXES:-} " in *" $1 "*) return 1 ;; esac
+  return 0
+}
+game_fix_on() {
+  [ "${POSITRON_GAME_FIXES:-1}" != 0 ] && fix_on "$1"
+}
+
 find_client_root() {
   client_root="$1"
   while [ -n "$client_root" ] && [ "$client_root" != "/" ] && [ ! -d "$client_root/appcache" ]; do
@@ -150,6 +161,29 @@ fi
 if [ -n "$np_tool_dir" ] && [ -r "$np_tool_dir/build" ]; then
   read -r np_build < "$np_tool_dir/build" || np_build=""
 fi
+early_app_id="$STEAM_COMPAT_APP_ID"
+case "$early_app_id" in ''|0) early_app_id="$SteamAppId" ;; esac
+case "$early_app_id" in ''|0) early_app_id=$(basename "$STEAM_COMPAT_DATA_PATH" 2>/dev/null) ;; esac
+case "$early_app_id" in ''|*[!0-9]*) early_app_id=0 ;; esac
+positron_ignored=""
+if [ "$early_app_id" != 0 ] && [ -r "$np_support/profiles/$early_app_id.env" ]; then
+  # The Positron preset is the single source of truth: drop leftover Steam launch options for
+  # settings the preset owns, so a fix switched off in Positron cannot come back from Steam.
+  for name in $(env | LC_ALL=C sed -nE 's/^(CX_GRAPHICS_BACKEND|WINEMSYNC|WINEESYNC|ROSETTA_ADVERTISE_AVX|NOTPROTON_RETINA|NOTPROTON_FULLSCREEN|MTL_HUD_ENABLED|(D3DM|DXMT)_[A-Z0-9_]*)=.*/\1/p'); do
+    unset -v "$name"
+    positron_ignored="$positron_ignored $name"
+  done
+  . "$np_support/profiles/$early_app_id.env"
+fi
+if [ "$early_app_id" = "1151340" ] && game_fix_on fo76-rosetta-pin && [ -d "$np_support/runners/crossover-26.3.0.39832/CrossOver" ]; then
+  np_build="26.3.0.39832"
+  np_flavor="rosetta"
+  np_display="Positron - CrossOver 26.3.0 (26.3.0.39832) [ROSETTA]"
+elif [ "${POSITRON_TRANSLATOR:-}" = "rosetta" ]; then
+  np_flavor="rosetta"
+elif [ "${POSITRON_TRANSLATOR:-}" = "fex" ]; then
+  np_flavor="fex"
+fi
 case "$np_build" in *[!A-Za-z0-9.-]*) np_build="" ;; esac
 np_display=$(sed -n 's/.*"display_name"[[:space:]]*"\(.*\)".*/\1/p' \
   "$np_tool_dir/compatibilitytool.vdf" 2>/dev/null | head -1) || np_display=""
@@ -246,18 +280,21 @@ echo "app_id=$app_id (STEAM_COMPAT_APP_ID=$STEAM_COMPAT_APP_ID)" >> "$log" 2>&1 
 positron_env="$HOME/Library/Application Support/Positron/profiles/$app_id.env"
 if [ -r "$positron_env" ]; then
   echo "=== loading Positron profile from $positron_env ===" >> "$log" 2>&1 || true
+  [ -z "$positron_ignored" ] || echo "steam launch options ignored, the Positron preset sets them:$positron_ignored" >> "$log" 2>&1 || true
   . "$positron_env"
 fi
 
 # Cap DXMT frame rate by default (120 FPS) so uncapped Unity/UE init scenes cannot
 # overwhelm the Apple Silicon AMCC0 DCS display/memory controller watchdog.
-export DXMT_CONFIG="${DXMT_CONFIG:-d3d11.maxFrameRate=120}"
+if fix_on dxmt-fps-cap; then
+  export DXMT_CONFIG="${DXMT_CONFIG:-d3d11.maxFrameRate=120}"
+fi
 
 # Clean macOS exFAT AppleDouble (._*) resource-fork files from external-drive game
 # directories so Windows games scanning *.zip / *.json / *.ba2 never open 4KB ._* headers.
 case "$STEAM_COMPAT_INSTALL_PATH" in
   /Volumes/*)
-    if [ "$verb" = waitforexitandrun ] && [ -d "$STEAM_COMPAT_INSTALL_PATH" ]; then
+    if [ "$verb" = waitforexitandrun ] && [ -d "$STEAM_COMPAT_INSTALL_PATH" ] && fix_on exfat-appledouble-cleanup; then
       echo "=== cleaning exFAT AppleDouble (._*) files in $STEAM_COMPAT_INSTALL_PATH ===" >> "$log" 2>&1 || true
       dot_clean -m "$STEAM_COMPAT_INSTALL_PATH" >/dev/null 2>&1 || true
       find "$STEAM_COMPAT_INSTALL_PATH" -name "._*" -delete >/dev/null 2>&1 || true
@@ -269,7 +306,7 @@ esac
 # (~/Library/Application Support/Positron/prefixes/<appid>) while preserving steamuser saves.
 case "$STEAM_COMPAT_DATA_PATH" in
   /Volumes/*)
-    if [ "$app_id" != 0 ]; then
+    if [ "$app_id" != 0 ] && fix_on apfs-shadow-prefix; then
       ext_compat_data="$STEAM_COMPAT_DATA_PATH"
       apfs_shadow_dir="$np_support/prefixes/$app_id"
       mkdir -p "$apfs_shadow_dir"
@@ -1459,15 +1496,127 @@ fi
 export WINEDEBUG="${WINEDEBUG:-err+all,fixme-all}"
 exec 8>&-
 trap - EXIT
-# If the target executable sits next to libcef.dll (e.g. SWTOR launcher.exe), force WineD3D
+
+# If the target executable is a dedicated 32-bit CEF launcher (e.g. SWTOR launcher.exe), force WineD3D
 # and force builtin vulkan-1=b so any game-bundled vulkan-1.dll/vk_swiftshader.dll cannot hijack
 # Wine into headless offscreen SwiftShader with no macOS Metal window surface.
-if [ "$verb" = waitforexitandrun ] && [ -n "${1:-}" ] && [ -f "$(dirname -- "$1")/libcef.dll" ]; then
-  export CX_GRAPHICS_BACKEND="wined3d"
-  export WINEDLLOVERRIDES="vulkan-1=b;libglesv2=b;${WINEDLLOVERRIDES:-}"
-  unset STEAM_DYLD_INSERT_LIBRARIES
-  echo "=== CEF launcher detected (libcef.dll): forced CX_GRAPHICS_BACKEND=wined3d, vulkan-1=b (builtin Metal surface), and disabled overlay shim ===" >> "$log" 2>&1 || true
+# Do NOT trigger on 64-bit games like Fallout76.exe that merely bundle libcef.dll for an in-game store!
+if [ "$verb" = waitforexitandrun ] && game_fix_on cef-launcher-wined3d && [ -n "${1:-}" ] && [ -f "$(dirname -- "$1")/libcef.dll" ]; then
+  case "${1##*/}" in
+    [Ll]auncher.exe|*[Ll]auncher*.exe)
+      export CX_GRAPHICS_BACKEND="wined3d"
+      export WINEDLLOVERRIDES="vulkan-1=b;libglesv2=b;${WINEDLLOVERRIDES:-}"
+      unset STEAM_DYLD_INSERT_LIBRARIES
+      echo "=== CEF launcher detected (${1##*/}): forced CX_GRAPHICS_BACKEND=wined3d, vulkan-1=b (builtin Metal surface), and disabled overlay shim ===" >> "$log" 2>&1 || true
+      ;;
+  esac
 fi
+
+# Automatic runtime fix for The Witcher 3: Wild Hunt -- Remastered (AppID 292030, Patch 5.0+ DX12):
+# 1. CrossOver's cxcompatdb Rule 29 redirects \bin\x64_dx12\witcher3.exe -> \bin\x64\witcher3.exe,
+#    which does not exist in Patch 5.0+ DX12-only builds unless bin/x64 is symlinked to x64_dx12.
+# 2. Patch 5.0+ compiles a stream-output PSO (PSO #15, GS without PS) that crashes Apple's
+#    libmetalirconverter.dylib; stage tholtman1-del's MIT-licensed amd_fidelityfx_loader_dx12.dll proxy
+#    (backing up the 26,376-byte AMD original to amd_fidelityfx_loader_dx12_orig.dll) and dinput8.dll
+#    SDR DXGI hook so D3DMetal skips PSO #15 and renders in clean 8-bit SDR instead of washed-out HDR.
+# 3. Bypass REDprelauncher.exe directly to bin/x64_dx12/witcher3.exe with CWD set to bin/x64_dx12.
+if [ "$verb" = waitforexitandrun ] && game_fix_on witcher3-dx12-fix && { [ "$app_id" = "292030" ] || [ -f "$STEAM_COMPAT_INSTALL_PATH/bin/x64_dx12/witcher3.exe" ]; }; then
+  w3_dx12_dir="$STEAM_COMPAT_INSTALL_PATH/bin/x64_dx12"
+  w3_fix_src="$np_support/fixes/witcher3"
+  if [ -d "$w3_dx12_dir" ]; then
+    if [ ! -e "$STEAM_COMPAT_INSTALL_PATH/bin/x64" ]; then
+      ln -s x64_dx12 "$STEAM_COMPAT_INSTALL_PATH/bin/x64" 2>/dev/null || true
+      echo "=== Witcher 3 DX12 fix: linked bin/x64 -> x64_dx12 for CrossOver cxcompatdb ===" >> "$log" 2>&1 || true
+    fi
+    if [ -f "$w3_fix_src/amd_fidelityfx_loader_dx12.dll" ]; then
+      if [ -f "$w3_dx12_dir/amd_fidelityfx_loader_dx12.dll" ] \
+        && ! cmp -s "$w3_fix_src/amd_fidelityfx_loader_dx12.dll" "$w3_dx12_dir/amd_fidelityfx_loader_dx12.dll"; then
+        if [ ! -f "$w3_dx12_dir/amd_fidelityfx_loader_dx12_orig.dll" ]; then
+          cp -fp "$w3_dx12_dir/amd_fidelityfx_loader_dx12.dll" "$w3_dx12_dir/amd_fidelityfx_loader_dx12_orig.dll" 2>/dev/null || true
+        fi
+        cp -fp "$w3_fix_src/amd_fidelityfx_loader_dx12.dll" "$w3_dx12_dir/amd_fidelityfx_loader_dx12.dll" 2>/dev/null || true
+        echo "=== Witcher 3 DX12 fix: staged amd_fidelityfx_loader_dx12.dll stream-output PSO proxy ===" >> "$log" 2>&1 || true
+      fi
+    fi
+    if [ -f "$w3_fix_src/dinput8.dll" ] && ! cmp -s "$w3_fix_src/dinput8.dll" "$w3_dx12_dir/dinput8.dll"; then
+      cp -fp "$w3_fix_src/dinput8.dll" "$w3_dx12_dir/dinput8.dll" 2>/dev/null || true
+      echo "=== Witcher 3 DX12 fix: staged dinput8.dll SDR DXGI colour-space hook ===" >> "$log" 2>&1 || true
+    fi
+    dot_clean -m "$w3_dx12_dir" >/dev/null 2>&1 || true
+    find "$w3_dx12_dir" -name "._*" -delete >/dev/null 2>&1 || true
+    case "${1:-}" in
+      *REDprelauncher.exe|*witcher3.exe)
+        shift || true
+        set -- "$w3_dx12_dir/witcher3.exe" "$@"
+        cd "$w3_dx12_dir" 2>/dev/null || true
+        echo "=== Witcher 3 DX12 fix: launching $w3_dx12_dir/witcher3.exe directly (cwd=$w3_dx12_dir) ===" >> "$log" 2>&1 || true
+        ;;
+    esac
+  fi
+  export CX_GRAPHICS_BACKEND="d3dmetal"
+  export WINEDLLOVERRIDES="winspool.drv=d;dinput8=n,b;amd_fidelityfx_loader_dx12=n,b;${WINEDLLOVERRIDES:-}"
+  unset STEAM_DYLD_INSERT_LIBRARIES
+  w3_cfg_dir="$WINEPREFIX/drive_c/users/steamuser/Documents/The Witcher 3"
+  mkdir -p "$w3_cfg_dir" 2>/dev/null || true
+  w3_cfg="$w3_cfg_dir/dx12user.settings"
+  w3_fs_mode="2"
+  [ "${NOTPROTON_FULLSCREEN:-1}" = "0" ] && w3_fs_mode="0"
+  if [ ! -f "$w3_cfg" ]; then
+    printf '[Viewport]\r\nFullScreenMode=%s\r\nVSync=true\r\n[Rendering]\r\nAllowStreamline=false\r\nAllowDLSS=false\r\n' "$w3_fs_mode" > "$w3_cfg" 2>/dev/null || true
+  fi
+fi
+
+# Automatic runtime fix for Red Dead Redemption 2 (AppID 1174180):
+# Eliminates 3D world/lighting blinking under D3DMetal by disabling D3DMetal's broken DLSS-to-MetalFX
+# bridge (nvngx=d, D3DM_ENABLE_METALFX=0), clamping NaN/Inf shader samples, using WINEESYNC=1,
+# disabling overlay-shim pixel-format swizzling, and patching system.xml to DX12 SDR + TAA.
+if [ "$verb" = waitforexitandrun ] && game_fix_on rdr2-anti-flicker && { [ "$app_id" = "1174180" ] || [ -f "$STEAM_COMPAT_INSTALL_PATH/RDR2.exe" ]; }; then
+  export CX_GRAPHICS_BACKEND="d3dmetal"
+  export D3DM_ENABLE_METALFX="0"
+  export D3DM_SAMPLE_NAN_TO_ZERO="1"
+  export D3DM_FLUSH_POS_INF_TO_NAN="1"
+  export WINEMSYNC="0"
+  export WINEESYNC="1"
+  export WINEDLLOVERRIDES="nvngx=d;${WINEDLLOVERRIDES:-}"
+  unset STEAM_DYLD_INSERT_LIBRARIES
+  rdr2_xml="$WINEPREFIX/drive_c/users/steamuser/Documents/Rockstar Games/Red Dead Redemption 2/Settings/system.xml"
+  if [ -f "$rdr2_xml" ]; then
+    rdr2_win="0"
+    [ "${NOTPROTON_FULLSCREEN:-1}" = "0" ] && rdr2_win="1"
+    sed -i '' \
+      -e 's|<dlssIndex value="[^"]*"|<dlssIndex value="0"|g' \
+      -e 's|<dlssQuality value="[^"]*"|<dlssQuality value="0"|g' \
+      -e 's|<hdr value="true"|<hdr value="false"|g' \
+      -e 's|<hdrFilmicMode value="true"|<hdrFilmicMode value="false"|g' \
+      -e "s|<windowed value=\"[^\"]*\"|<windowed value=\"$rdr2_win\"|g" \
+      -e 's|<taa>kSettingLevel_Off</taa>|<taa>kSettingLevel_High</taa>|g' \
+      -e 's|<API>kSettingAPI_Vulkan</API>|<API>kSettingAPI_DX12</API>|g' \
+      "$rdr2_xml" 2>/dev/null || true
+    echo "=== RDR2 anti-flicker fix: configured D3DMetal (MetalFX off, NaN/Inf clamp, esync) and patched system.xml (DLSS off, SDR, windowed=$rdr2_win, TAA High) ===" >> "$log" 2>&1 || true
+  fi
+fi
+
+# Automatic runtime fix for Fallout 76 (AppID 1151340):
+# Honors Positron's NOTPROTON_FULLSCREEN setting (default 1 = Fullscreen at full resolution, 0 = Windowed)
+# without shrinking the user's in-game resolution to 2560x1440.
+if [ "$verb" = waitforexitandrun ] && game_fix_on fo76-display-prefs && { [ "$app_id" = "1151340" ] || [ -f "$STEAM_COMPAT_INSTALL_PATH/Fallout76.exe" ]; }; then
+  fo76_prefs="$WINEPREFIX/drive_c/users/steamuser/Documents/My Games/Fallout 76/Fallout76Prefs.ini"
+  if [ -f "$fo76_prefs" ]; then
+    if [ "${NOTPROTON_FULLSCREEN:-1}" = "1" ]; then
+      sed -i '' \
+        -e 's/^bFull Screen=.*/bFull Screen=1/' \
+        -e 's/^iSize W=2560/iSize W=3840/' \
+        -e 's/^iSize H=1440/iSize H=2160/' \
+        "$fo76_prefs" 2>/dev/null || true
+    else
+      sed -i '' \
+        -e 's/^bFull Screen=.*/bFull Screen=0/' \
+        -e 's/^bBorderless=.*/bBorderless=1/' \
+        "$fo76_prefs" 2>/dev/null || true
+    fi
+  fi
+fi
+
 printf 'launch_args=%s\n' "$launch_args" >> "$log" 2>&1 || true
 printf '=== launching (%s): %s %s ===\n' "$verb" "$WINELOADER" "$*" >> "$log" 2>&1 || true
 
@@ -1705,6 +1854,7 @@ set -- \
   --env WINEDLLPATH="$WINEDLLPATH" \
   --env WINEDLLOVERRIDES="$WINEDLLOVERRIDES" \
   --env WINEMSYNC="$WINEMSYNC" \
+  --env WINEESYNC="${WINEESYNC:-}" \
   --env WINEPREFIX="$WINEPREFIX" \
   --env WINEDEBUG="$WINEDEBUG" \
   --env PATH="$PATH" \

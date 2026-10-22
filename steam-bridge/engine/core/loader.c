@@ -217,12 +217,9 @@ static void *install_thread(void *unused) {
 
     np_free_profile(&sigdb);
 
-    // Poll every 400ms for live profile tool changes applied from Positron.app
-    while (g_active) {
-        np_compat_poll_pending_applies();
-        usleep(400000);
-    }
-
+    // Live preset applies from Positron.app are picked up by the CCompatManager hooks, which run
+    // on Steam's own thread. Calling SetCompatToolMapping from this thread raced Steam's main
+    // thread and corrupted its heap (tier0 memstd.cpp fatal assert).
     return NULL;
 }
 

@@ -253,7 +253,7 @@ public enum SteamLibraryDiscovery {
     ) -> PresetCatalogEntry {
         let fm = FileManager.default
         var gameDir: URL?
-        for lib in libraries where lib.isConnected && !lib.isExternal {
+        for lib in libraries where lib.isConnected {
             let acf = lib.steamappsURL.appending(path: "appmanifest_\(appID).acf")
             if let installDir = parseAppManifestInstallDir(at: acf) {
                 let candidate = lib.steamappsURL.appending(path: "common/\(installDir)")
@@ -263,7 +263,16 @@ public enum SteamLibraryDiscovery {
                 }
             }
         }
+        return autoDetectPreset(forAppID: appID, title: title, gameDirectory: gameDir)
+    }
 
+    /// Same analysis for a known game folder (used for non-Steam games added to Positron).
+    public static func autoDetectPreset(
+        forAppID appID: UInt32,
+        title: String,
+        gameDirectory gameDir: URL?
+    ) -> PresetCatalogEntry {
+        let fm = FileManager.default
         var has32BitExe = false
         var has64BitExe = false
         var hasUnity = false
@@ -377,33 +386,95 @@ public enum SteamLibraryDiscovery {
 
         for lib in libraries where lib.isConnected {
             let libKey = lib.rootURL.path(percentEncoded: false)
-            if lib.isExternal, let appIDs = vdfAppsByLibrary[libKey], !appIDs.isEmpty {
-                for appID in appIDs where appID != 228980 {
+            // Read appmanifest_*.acf directly (internal or external drive) so a game that just
+            // finished downloading appears before Steam rewrites libraryfolders.vdf.
+            guard let entries = try? fm.contentsOfDirectory(at: lib.steamappsURL, includingPropertiesForKeys: nil) else {
+                // The drive could not be read: fall back to the apps Steam recorded in libraryfolders.vdf.
+                for appID in vdfAppsByLibrary[libKey] ?? [] where appID != 228980 {
                     if GameQuirksDatabase.knownNativeMacAppIDs.contains(appID) { continue }
-                    let curatedTitle = GameQuirksDatabase.presetInfo(forAppID: appID)?.title
-                    let launcherTitle = resolveLauncherBundleTitle(forAppID: appID)
-                    installed[appID] = curatedTitle ?? launcherTitle ?? "Steam Game (\(appID))"
+                    installed[appID] = resolveBestGameTitle(forAppID: appID, steamRoot: steamRoot)
                 }
-                continue
-            }
-
-            guard !lib.isExternal,
-                  let entries = try? fm.contentsOfDirectory(at: lib.steamappsURL, includingPropertiesForKeys: nil) else {
                 continue
             }
             for entry in entries where entry.lastPathComponent.hasPrefix("appmanifest_") && entry.pathExtension == "acf" {
                 let numPart = entry.deletingPathExtension().lastPathComponent.dropFirst("appmanifest_".count)
                 guard let appID = UInt32(numPart), appID != 228980 else { continue }
                 if GameQuirksDatabase.knownNativeMacAppIDs.contains(appID) { continue }
+                guard isFullyInstalled(manifestAt: entry) else { continue }
                 if let installDir = parseAppManifestInstallDir(at: entry) {
                     let gameDir = lib.steamappsURL.appending(path: "common/\(installDir)")
                     if isNativeMacInstallation(at: gameDir) { continue }
                 }
-                let name = parseAppManifestName(at: entry) ?? "Steam App \(appID)"
+                let name = parseAppManifestName(at: entry) ?? resolveBestGameTitle(forAppID: appID, steamRoot: steamRoot)
                 installed[appID] = name
             }
         }
+
+        // Also include any newly installed external-drive games that already have an internal APFS shadow prefix
+        // or launcher bundle in ~/Library/Application Support/Positron/{prefixes,launchers} even before Steam
+        // flushes libraryfolders.vdf to disk.
+        let supportDir = SteamIntegration.positronSupportDir
+        for sub in ["prefixes", "launchers"] {
+            let dir = supportDir.appending(path: sub)
+            guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { continue }
+            for item in items {
+                let name = item.lastPathComponent
+                guard !name.isEmpty, name.allSatisfy(\.isNumber),
+                      let appID = UInt32(name), appID != 228980,
+                      !GameQuirksDatabase.knownNativeMacAppIDs.contains(appID),
+                      !StandaloneGameStore.isVirtualAppID(appID),
+                      installed[appID] == nil else { continue }
+                installed[appID] = resolveBestGameTitle(forAppID: appID, steamRoot: steamRoot)
+            }
+        }
+
         return installed
+    }
+
+    public static func resolveBestGameTitle(
+        forAppID appID: UInt32,
+        steamRoot: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/Steam")
+    ) -> String {
+        if let curated = GameQuirksDatabase.presetInfo(forAppID: appID)?.title {
+            return curated
+        }
+        if let launcher = resolveLauncherBundleTitle(forAppID: appID) {
+            return launcher
+        }
+        if let appinfoTitle = resolveAppInfoVDFTitle(forAppID: appID, steamRoot: steamRoot) {
+            return appinfoTitle
+        }
+        return "Steam Game (\(appID))"
+    }
+
+    private static func resolveAppInfoVDFTitle(forAppID appID: UInt32, steamRoot: URL) -> String? {
+        let fm = FileManager.default
+        let appinfoTool = SteamIntegration.positronSupportDir.appending(path: "appinfo")
+        let appinfoVDF = steamRoot.appending(path: "appcache/appinfo.vdf")
+        guard fm.isExecutableFile(atPath: appinfoTool.path(percentEncoded: false)),
+              fm.fileExists(atPath: appinfoVDF.path(percentEncoded: false)) else {
+            return nil
+        }
+        let proc = Process()
+        proc.executableURL = appinfoTool
+        proc.arguments = [appinfoVDF.path(percentEncoded: false), String(appID)]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            guard proc.terminationStatus == 0,
+                  let text = String(data: data, encoding: .utf8) else { return nil }
+            for line in text.components(separatedBy: .newlines) where line.hasPrefix("name=") {
+                let name = String(line.dropFirst("name=".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !name.isEmpty { return name }
+            }
+        } catch {
+            return nil
+        }
+        return nil
     }
 
     private static func resolveLauncherBundleTitle(forAppID appID: UInt32) -> String? {
@@ -415,6 +486,24 @@ public enum SteamLibraryDiscovery {
             return item.deletingPathExtension().lastPathComponent
         }
         return nil
+    }
+
+    /// Steam's StateFlags from an appmanifest (4 = fully installed, 1024 = updating, 2 = update required).
+    public static func parseAppManifestStateFlags(at acfURL: URL) -> Int? {
+        guard let text = try? String(contentsOf: acfURL, encoding: .utf8) else { return nil }
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("\"StateFlags\"") else { continue }
+            let parts = trimmed.split(separator: "\"", omittingEmptySubsequences: false)
+            if parts.count >= 4 { return Int(parts[3]) }
+        }
+        return nil
+    }
+
+    /// False while the first download is still running; manifests without StateFlags count as installed.
+    public static func isFullyInstalled(manifestAt acfURL: URL) -> Bool {
+        guard let flags = parseAppManifestStateFlags(at: acfURL) else { return true }
+        return flags & 4 != 0
     }
 
     public static func parseAppManifestName(at acfURL: URL) -> String? {
@@ -654,7 +743,7 @@ public enum PrefixManager {
                 let pfx = item.appending(path: "pfx")
                 guard fm.fileExists(atPath: pfx.path(percentEncoded: false)) else { continue }
                 let aid = UInt32(name) ?? 0
-                let title = GameQuirksDatabase.presetInfo(forAppID: aid)?.title
+                let title = SteamLibraryDiscovery.resolveBestGameTitle(forAppID: aid)
                 let stamp = readStamp(in: item)
                 let buildRecord = (try? String(contentsOf: item.appending(path: "notproton-build"), encoding: .utf8))?
                     .components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespaces)
@@ -698,7 +787,8 @@ public enum PrefixManager {
         forAppID appID: UInt32,
         gameTitle: String?,
         libraries: [SteamLibraryFolder],
-        existingPrefixes: [DiscoveredPrefix]
+        existingPrefixes: [DiscoveredPrefix],
+        preferPositronPrefix: Bool = false
     ) -> DiscoveredPrefix {
         let appIDStr = String(appID)
         if let existing = existingPrefixes.first(where: { $0.appID == appIDStr }) {
@@ -713,7 +803,10 @@ public enum PrefixManager {
         let isExternal = installedLib?.isExternal ?? false
         let compatURL: URL
         let libLabel: String
-        if isExternal || fm.fileExists(atPath: shadowCandidate.path(percentEncoded: false)) {
+        if preferPositronPrefix {
+            compatURL = shadowCandidate
+            libLabel = "Positron Prefix (Non-Steam Game)"
+        } else if isExternal || fm.fileExists(atPath: shadowCandidate.path(percentEncoded: false)) {
             compatURL = shadowCandidate
             libLabel = "\(installedLib?.label ?? "External Drive") -> Internal APFS Prefix"
         } else if let lib = installedLib {
