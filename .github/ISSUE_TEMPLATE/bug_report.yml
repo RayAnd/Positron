@@ -1,0 +1,33 @@
+name: Bug Report
+description: Report a bug in Positron.app, the Steam bridge, or a game launch failure
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting an issue! Please attach or paste relevant lines from `~/Library/Application Support/Positron/prefixes/<appid>/notproton-run.log` if reporting a game launch problem.
+  - type: input
+    id: game
+    attributes:
+      label: Game Title & Steam AppID (if applicable)
+      placeholder: "e.g., Fallout 76 (1151340) or N/A"
+  - type: input
+    id: env
+    attributes:
+      label: macOS, Apple Silicon Chip & CrossOver Version
+      placeholder: "e.g., macOS 15.4, Apple M2 Max, CrossOver 26.3 / Preview 27.0"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the issue and the steps to reproduce it.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Launch Log (`notproton-run.log` / `positron-steam.log`)
+      render: shell

@@ -1,49 +1,63 @@
 # Positron Architecture
 
-Positron is structured into four modular layers that work together to run Windows games inside the native macOS Steam client on Apple Silicon (`arm64`):
+Positron is organized into four modular layers that work together to run Windows Steam games and standalone Windows executables on Apple Silicon macOS:
 
-```text
-Positron/
-├── Sources/
-│   ├── PositronCore/               # Core framework (Runner discovery, Steam VDF, Prefixes, Profiles)
-│   │   ├── GameProfileStore.swift  # Per-AppID launch profiles, 50+ curated game presets & quirk rules
-│   │   ├── PrefixManager.swift     # Non-blocking library discovery, APFS CoW prefix migration & Wine tools
-│   │   ├── RunnerDiscovery.swift   # Dynamic PE32/PE32+ ntdll.dll inspection & CrossOver/Wine discovery
-│   │   └── SteamIntegration.swift  # Steam VDF manipulation, compatibility tool staging & DYLD launch
-│   ├── PositronApp/                # Native macOS SwiftUI + AppKit application
-│   │   ├── PositronApp.swift       # App entry point & screenshot exporter
-│   │   ├── Theme/                  # Adaptive Light & Dark Mode Liquid Glass theme system
-│   │   ├── Services/               # Steam & Positron high-res icon and hero artwork loader
-│   │   ├── ViewModels/             # Main-actor observable app state
-│   │   ├── Components/             # Reusable Liquid Glass brand icon, badges, and interactive cards
-│   │   └── Views/                  # InstalledGamesView, SteamSetupView, EnginesScreenView, DrivesScreenView
-│   └── PositronCLI/                # Command-line interface (`positron status`, `doctor`, `profile`)
-├── steam-bridge/                   # Universal (arm64 + x86_64) DYLD bridge (`positron-steam.dylib`)
-│   ├── engine/                     # Mach-O anchor resolver, Dobby hooks, CEF webpatch, compat_run.sh
-│   ├── include/                    # Public C headers for Mach-O, tiered resolver, and WebUI injection
-│   ├── src/                        #LC_UUID cache, tiered hook groups, and WebUI injection implementation
-│   └── tests/                      # Unit tests for Mach-O parsing, ARM64 xref resolution, and VDF generation
-├── ntdll-patcher/                  # Dynamic PE32/PE32+ (`x86_64`, `i386`, `aarch64`) ntdll.dll analyzer
-│   ├── include/
-│   ├── src/
-│   └── tests/
-├── runner-supervisor/              # Native C17 launch supervisor (`positron-run`)
-│   ├── include/
-│   ├── src/                        # Offline Wine registry editor, APFS CoW prefix migrator, supervisor
-│   └── tests/
-├── Resources/                      # AppIcon.icns, Liquid Glass icon assets, and Steam client signature DBs
-└── Tests/PositronCoreTests/        # Swift Testing suite for PositronCore
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│ 1. Positron.app (SwiftUI) & positron CLI                                   │
+│    • Unified Installed Games inspector (Hero Card + 2-Column Bento Grid)   │
+│    • 130+ Preset Catalog (51 Hand-Tuned + 80+ Engine Presets)              │
+│    • Per-Game Toggleable Fixes (RuntimeFix + DLL & Env Overrides)          │
+│    • Live SteamLibraryWatcher (DispatchSourceFileSystemObject on steamapps)│
+│    • Standalone Non-Steam .exe Game Manager & Direct Launcher              │
+└───────────────────────────────────────┬────────────────────────────────────┘
+                                        │
+┌───────────────────────────────────────▼────────────────────────────────────┐
+│ 2. PositronCore (Swift 6 Framework)                                        │
+│    • RunnerDiscovery: Dynamic PE32/PE32+/ARM64EC ntdll.dll inspection      │
+│    • GameProfileStore: Per-game .json + .env generation & fix switches     │
+│    • SteamIntegration: Info.plist injection, VDF mapping & auto-updates    │
+│    • PrefixManager: APFS clonefile migration, winecfg/regedit & installers │
+└───────────────────────────────────────┬────────────────────────────────────┘
+                                        │
+┌───────────────────────────────────────▼────────────────────────────────────┐
+│ 3. positron-steam.dylib (Universal arm64/x86_64 C17 Steam Bridge)          │
+│    • Tiered Mach-O signature resolver + LC_UUID RVA cache                  │
+│    • Thread-safe CCompatManager hooks (live preset apply on Steam thread)  │
+│    • WebUI transport routes & sp.js patch (hides Steam Compatibility tab)  │
+└───────────────────────────────────────┬────────────────────────────────────┘
+                                        │
+┌───────────────────────────────────────▼────────────────────────────────────┐
+│ 4. compat_run.sh & positron-run (Launch Supervisor & Runtime Fix Engine)   │
+│    • Enforces Positron preset over stale Steam LaunchOptions               │
+│    • Evaluates fix_on / game_fix_on switches from POSITRON_DISABLED_FIXES  │
+│    • Redirects ExFAT /Volumes/* prefixes to internal APFS shadow prefixes  │
+│    • Cleans macOS ._* AppleDouble files & stages game-specific DLL fixes   │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## 1. `steam-bridge` (`positron-steam.dylib`)
-- **Tiered Hook Groups**: Separates `steamclient.dylib` hooks into `CORE_COMPAT` (essential Steam Play anchors) and `OPTIONAL_UX`. If a Steam Beta update shifts an optional UI symbol, Windows game launching remains unaffected.
-- **`LC_UUID` Resolved-Address Cache**: Caches resolved anchor RVAs by the Mach-O `LC_UUID` of `steamclient.dylib`, avoiding 30 MB binary scans on warm launches.
+---
 
-## 2. `ntdll-patcher`
-- Dynamically parses `x86_64`, `i386`, and `aarch64` `ntdll.dll` PE headers and export tables (`LdrLoadDll`, `NtCreateUserProcess`) without relying on static SHA-256 allowlists.
+## 1. Universal Runner Discovery & Dynamic `ntdll.dll` Patcher (`ntdll-patcher/`)
 
-## 3. `runner-supervisor` (`positron-run`)
-- Mutates `system.reg` and `user.reg` offline before `wineserver` starts, and performs APFS copy-on-write (`clonefile`) prefix auto-migration between Rosetta 2 and FEX ARM64EC while preserving `steamuser` saves.
+Instead of maintaining a brittle SHA-256 hash allowlist of specific CrossOver builds, Positron parses the PE32 (`i386`), PE32+ (`x86_64`), and ARM64EC (`aarch64`) headers of any installed Wine/CrossOver `ntdll.dll`:
+- Locates `LdrLoadDll` in the Export Address Table (`IMAGE_DIRECTORY_ENTRY_EXPORT`).
+- Finds or appends an executable code cave to trigger `lsteamclient.dll` initialization on process startup.
 
-## 4. `PositronCore` & `PositronApp`
-- Provides a native macOS user interface with adaptive Light & Dark Mode Liquid Glass styling, automatic Steam artwork loading, 50+ curated game presets, 32-bit CEF launcher quirk detection, and external drive (`APFS` / `ExFAT` shadow prefix) management.
+---
+
+## 2. Update-Resilient Steam Bridge (`steam-bridge/`)
+
+`positron-steam.dylib` is injected into `/Applications/Steam.app` via `LSEnvironment.DYLD_INSERT_LIBRARIES`:
+- **Mach-O Signature Resolver**: Resolves `CCompatManager`, `CUserShortcuts`, and `CWebUITransport` symbols in `steamclient.dylib` and `steamui.dylib`.
+- **Thread-Safe Live Preset Apply**: When `Positron.app` applies a preset, it writes `~/Library/Application Support/Positron/pending-apply.tsv`. `hook_CCompatManager_BIsEnabled` and `hook_FindToolForTargetApp` consume `pending-apply.tsv` directly on Steam's own thread—eliminating cross-thread heap corruption in `tier0`.
+- **Single Source of Truth UI Patch (`webpatch.c`)**: Enables the Windows library filter and green Install/Play button in Steam while hiding Steam's in-app Compatibility properties tab so `Positron.app` owns all per-game settings.
+
+---
+
+## 3. Switchable Fix Engine & Launch Script (`steam-bridge/engine/feats/compat_run.sh`)
+
+Every launch through `compatibilitytools.d/positron-proton-*/run` executes the embedded `compat_run.sh` supervisor:
+1. **Single-Source-of-Truth Environment Scrub**: Before sourcing `~/Library/Application Support/Positron/profiles/<appid>.env`, `compat_run.sh` clears any stale `CX_GRAPHICS_BACKEND`, `WINEMSYNC`, `WINEESYNC`, `D3DM_*`, or `DXMT_*` variables left over in Steam's per-game Launch Options.
+2. **Per-Fix Switches (`fix_on` & `game_fix_on`)**: Each game-specific patch (`witcher3-dx12-fix`, `rdr2-anti-flicker`, `fo76-rosetta-pin`, `fo76-display-prefs`, `cef-launcher-wined3d`) and global safeguard (`exfat-appledouble-cleanup`, `apfs-shadow-prefix`, `dxmt-fps-cap`) checks `POSITRON_GAME_FIXES` and `POSITRON_DISABLED_FIXES` before executing.
+3. **macOS Game Mode Bundle**: Wraps the Wine loader in a per-game macOS `.app` bundle under `~/Library/Application Support/Positron/launchers/<appid>/` with the game's icon and `LSApplicationCategoryType = public.app-category.games` so macOS Game Mode activates automatically.

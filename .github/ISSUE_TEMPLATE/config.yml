@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 📖 Positron FAQ & Troubleshooting Guide
+    url: https://github.com/RayAnd/Positron/blob/main/docs/FAQ.md
+    about: Check solutions for common CPU/GPU settings, external ExFAT drives, and game fixes first.

@@ -1,0 +1,30 @@
+name: Game Preset or Fix Request
+description: Share a working game preset or request a built-in compatibility fix for a Windows game
+title: "[Game Preset]: "
+labels: ["game-preset", "enhancement"]
+body:
+  - type: input
+    id: title_appid
+    attributes:
+      label: Game Title & Steam AppID
+      placeholder: "e.g., Kingdom Come: Deliverance II (1771300)"
+    validations:
+      required: true
+  - type: dropdown
+    id: pipeline
+    attributes:
+      label: Tested / Recommended Pipeline
+      options:
+        - Rosetta 2 + D3DMetal (DX12)
+        - Rosetta 2 + DXMT (DX11)
+        - FEX ARM64EC + DXMT (DX11)
+        - Rosetta 2 + WineD3D (DX9 / 32-bit / CEF)
+        - Rosetta 2 + DXVK (Vulkan)
+        - Needs Investigation (Not Launching / Rendering Issue)
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Required DLL Overrides, Environment Flags, or Issue Details
+      placeholder: "e.g., Requires xaudio2_9=n,b and Msync, or crashes on startup with..."
