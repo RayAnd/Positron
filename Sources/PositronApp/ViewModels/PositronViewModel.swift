@@ -60,6 +60,14 @@ final class PositronViewModel {
     var gameFilter: GameListFilter = .all
     var customLibraryPaths: [String] = []
     var overrideColorScheme: ColorScheme? = nil
+    var standaloneGames: [StandaloneGame] = []
+    var isBridgeUpdateNeeded: Bool = false
+    var isSteamRunning: Bool = false
+    var showSupportSheet: Bool = false
+    let funding = PositronFundingConfig.current()
+
+    @ObservationIgnored private var detectedCache: [UInt32: PresetCatalogEntry] = [:]
+    @ObservationIgnored private var libraryWatcher: SteamLibraryWatcher?
 
     let profileStore: GameProfileStore
 
@@ -70,6 +78,10 @@ final class PositronViewModel {
         self.customLibraryPaths = UserDefaults.standard.stringArray(forKey: "PositronCustomSteamLibraries") ?? []
         _ = GameQuirksDatabase.loadCustomCatalog()
         refreshAll()
+        libraryWatcher = SteamLibraryWatcher { [weak self] in
+            self?.refreshInstalledGames()
+        }
+        libraryWatcher?.watch(libraries.filter(\.isConnected).map(\.steamappsURL))
     }
 
     var installedGamesList: [GamePresetInfo] {
@@ -81,9 +93,12 @@ final class PositronViewModel {
             if let curated = GameQuirksDatabase.presetInfo(forAppID: appID) {
                 items.append(curated)
             } else {
-                let detected = SteamLibraryDiscovery.autoDetectPreset(forAppID: appID, title: installedTitle, in: libraries)
-                items.append(detected.info)
+                items.append(detectedEntry(for: appID, title: installedTitle).info)
             }
+        }
+        for game in standaloneGames where !seenAppIDs.contains(game.id) {
+            seenAppIDs.insert(game.id)
+            items.append(detectedEntry(for: game.id, title: game.title).info)
         }
         items.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
 
@@ -111,8 +126,7 @@ final class PositronViewModel {
         if let curated = GameQuirksDatabase.presetInfo(forAppID: selectedAppID) {
             return curated
         }
-        let title = installedApps[selectedAppID] ?? "Steam Game (\(selectedAppID))"
-        return SteamLibraryDiscovery.autoDetectPreset(forAppID: selectedAppID, title: title, in: libraries).info
+        return detectedEntry(for: selectedAppID, title: displayTitle(for: selectedAppID)).info
     }
 
     var recommendedProfileForSelected: GameProfile {
@@ -120,8 +134,7 @@ final class PositronViewModel {
         if GameQuirksDatabase.presetInfo(forAppID: selectedAppID) != nil {
             return GameQuirksDatabase.defaultProfile(forAppID: selectedAppID, preferredTranslator: fallback)
         } else {
-            let title = installedApps[selectedAppID] ?? "Steam Game \(selectedAppID)"
-            return SteamLibraryDiscovery.autoDetectPreset(forAppID: selectedAppID, title: title, in: libraries).recommendedProfile
+            return detectedEntry(for: selectedAppID, title: displayTitle(for: selectedAppID)).recommendedProfile
         }
     }
 
@@ -130,8 +143,14 @@ final class PositronViewModel {
         let cur = editingProfile.sanitized()
         return cur.translator == rec.translator &&
             cur.graphics == rec.graphics &&
+            cur.sync == rec.sync &&
+            cur.fullscreenMode == rec.fullscreenMode &&
+            cur.gameFixesEnabled == rec.gameFixesEnabled &&
+            Set(cur.disabledFixes) == Set(rec.disabledFixes) &&
             cur.retinaMode == rec.retinaMode &&
-            cur.disableHidraw == rec.disableHidraw
+            cur.disableHidraw == rec.disableHidraw &&
+            cur.dllOverrides == rec.dllOverrides &&
+            cur.extraEnvironment == rec.extraEnvironment
     }
 
     func saveCurrentGameToPresetsCatalog() {
@@ -154,7 +173,8 @@ final class PositronViewModel {
             forAppID: selectedAppID,
             gameTitle: selectedPresetInfo.title,
             libraries: libraries,
-            existingPrefixes: prefixes
+            existingPrefixes: prefixes,
+            preferPositronPrefix: isStandalone(selectedAppID)
         )
     }
 
@@ -163,20 +183,25 @@ final class PositronViewModel {
             forAppID: appID,
             gameTitle: installedApps[appID],
             libraries: libraries,
-            existingPrefixes: prefixes
+            existingPrefixes: prefixes,
+            preferPositronPrefix: isStandalone(appID)
         )
         return FileManager.default.fileExists(atPath: pfx.driveCURL.path(percentEncoded: false))
     }
 
     func refreshAll() {
         isSteamInstalled = FileManager.default.fileExists(atPath: "/Applications/Steam.app")
-        steamState = SteamIntegration.inspectState()
-        blockSteamUpdates = SteamIntegration.isSteamUpdateBlocked()
         runners = RunnerDiscovery.discoverAll()
-        libraries = SteamLibraryDiscovery.discoverLibraries(extraLibraryPaths: customLibraryPaths)
-        installedApps = SteamLibraryDiscovery.discoverInstalledApps(in: libraries)
-        prefixes = PrefixManager.discoverSteamPrefixes(libraries: libraries, includePositronShadowRoot: true)
-        if installedApps[selectedAppID] == nil, let firstID = installedApps.keys.sorted().first {
+        steamState = SteamIntegration.inspectState()
+        if steamState.isPositronInjected {
+            SteamIntegration.syncBundledFixesAndTools(runners: runners)
+            _ = SteamIntegration.autoUpdateSteamBridgeIfClosed(runners: runners)
+        }
+        isSteamRunning = SteamIntegration.isSteamRunning()
+        isBridgeUpdateNeeded = SteamIntegration.isBridgeUpdatePending()
+        blockSteamUpdates = SteamIntegration.isSteamUpdateBlocked()
+        rescanLibraries()
+        if !isKnownGame(selectedAppID), let firstID = installedApps.keys.sorted().first ?? standaloneGames.first?.id {
             selectedAppID = firstID
         }
         loadProfile(for: selectedAppID)
@@ -210,7 +235,11 @@ final class PositronViewModel {
             )
             steamState = SteamIntegration.inspectState()
             blockSteamUpdates = SteamIntegration.isSteamUpdateBlocked()
-            statusBanner = "Positron enabled in Steam with \(registeredTools.count) compatibility tool(s)."
+            isSteamRunning = SteamIntegration.isSteamRunning()
+            isBridgeUpdateNeeded = SteamIntegration.isBridgeUpdatePending()
+            statusBanner = isSteamRunning
+                ? "Updated Positron bridge in Steam.app and restarted Steam (\(registeredTools.count) tool(s) active)."
+                : "Positron enabled in Steam.app (\(registeredTools.count) tool(s) ready)."
         } catch {
             statusBanner = "Could not enable in Steam: \(error.localizedDescription)"
         }
@@ -254,6 +283,9 @@ final class PositronViewModel {
         selectedAppID = appID
         let fallback: CPUTranslator = runners.contains(where: \.supportsFEX) ? .fex : .rosetta
         editingProfile = profileStore.load(forAppID: appID, fallbackTranslator: fallback)
+        if !profileStore.hasSavedProfile(forAppID: appID), GameQuirksDatabase.presetInfo(forAppID: appID) == nil {
+            editingProfile = recommendedProfileForSelected
+        }
         if editingProfile.runnerID == nil {
             editingProfile.runnerID = runners.first?.id
         }
@@ -261,6 +293,39 @@ final class PositronViewModel {
 
     func hasAppliedPreset(for appID: UInt32) -> Bool {
         profileStore.hasSavedProfile(forAppID: appID)
+    }
+
+    var hasUnsavedProfileEdits: Bool {
+        guard hasAppliedPreset(for: selectedAppID) else { return true }
+        let saved = profileStore.load(forAppID: selectedAppID, fallbackTranslator: editingProfile.translator).sanitized()
+        let cur = editingProfile.sanitized()
+        return saved.translator != cur.translator ||
+            saved.graphics != cur.graphics ||
+            saved.sync != cur.sync ||
+            saved.fullscreenMode != cur.fullscreenMode ||
+            saved.retinaMode != cur.retinaMode ||
+            saved.metalHUD != cur.metalHUD ||
+            saved.advertiseAVX != cur.advertiseAVX ||
+            saved.disableHidraw != cur.disableHidraw ||
+            saved.gameFixesEnabled != cur.gameFixesEnabled ||
+            Set(saved.disabledFixes) != Set(cur.disabledFixes) ||
+            saved.dllOverrides != cur.dllOverrides ||
+            saved.extraEnvironment != cur.extraEnvironment
+    }
+
+    /// One-click helper: enables/updates the bridge if needed, and opens or restarts Steam.app.
+    func openOrSyncSteam() {
+        if !steamState.isPositronInjected || isBridgeUpdateNeeded {
+            enableInSteam()
+            if !SteamIntegration.isSteamRunning() {
+                _ = try? Process.run(URL(filePath: "/usr/bin/open"), arguments: [SteamIntegration.defaultSteamApp.path(percentEncoded: false)])
+                isSteamRunning = true
+            }
+            return
+        }
+        _ = try? Process.run(URL(filePath: "/usr/bin/open"), arguments: [SteamIntegration.defaultSteamApp.path(percentEncoded: false)])
+        isSteamRunning = true
+        statusBanner = "Opened Steam.app with Positron active."
     }
 
     func resetToRecommendedProfile() {
@@ -276,8 +341,19 @@ final class PositronViewModel {
         saveCurrentProfile()
     }
 
-    func saveCurrentProfile() {
+    @discardableResult
+    func saveCurrentProfile() -> Bool {
         editingProfile = editingProfile.sanitized()
+        if isStandalone(selectedAppID) {
+            do {
+                try profileStore.save(editingProfile)
+                statusBanner = "Saved preset for \(selectedPresetInfo.title)."
+                return true
+            } catch {
+                statusBanner = "Could not save preset: \(error.localizedDescription)"
+                return false
+            }
+        }
         do {
             let toolName = try SteamIntegration.applyProfileToSteam(
                 editingProfile,
@@ -285,12 +361,19 @@ final class PositronViewModel {
                 profileStore: profileStore
             )
             statusBanner = "Applied \(selectedPresetInfo.title) to Steam → \(toolName) (\(editingProfile.graphics.rawValue.uppercased()))."
+            return true
         } catch {
             statusBanner = "Failed to apply preset to Steam: \(error.localizedDescription)"
+            return false
         }
     }
 
     func removeCurrentProfileFromSteam() {
+        if isStandalone(selectedAppID) {
+            profileStore.removeProfile(forAppID: selectedAppID)
+            statusBanner = "Removed the saved preset for \(selectedPresetInfo.title)."
+            return
+        }
         do {
             try SteamIntegration.removeProfileFromSteam(appID: selectedAppID, profileStore: profileStore)
             statusBanner = "Removed Positron preset override for \(selectedPresetInfo.title) in Steam."
@@ -372,10 +455,175 @@ final class PositronViewModel {
         }
     }
 
+    // MARK: - Library scanning
+
+    private func rescanLibraries() {
+        libraries = SteamLibraryDiscovery.discoverLibraries(extraLibraryPaths: customLibraryPaths, scanMountedVolumes: true)
+        installedApps = SteamLibraryDiscovery.discoverInstalledApps(in: libraries)
+        standaloneGames = StandaloneGameStore.load()
+        prefixes = PrefixManager.discoverSteamPrefixes(libraries: libraries, includePositronShadowRoot: true)
+        detectedCache = [:]
+        libraryWatcher?.watch(libraries.filter(\.isConnected).map(\.steamappsURL))
+    }
+
+    /// Called by the watcher when a steamapps folder changes, a drive mounts, or the app comes forward.
+    /// Keeps the current (possibly unsaved) preset edits.
+    func refreshInstalledGames() {
+        let before = Set(installedApps.keys)
+        _ = SteamIntegration.autoUpdateSteamBridgeIfClosed(runners: runners)
+        isSteamRunning = SteamIntegration.isSteamRunning()
+        isBridgeUpdateNeeded = SteamIntegration.isBridgeUpdatePending()
+        rescanLibraries()
+        let added = installedApps.filter { !before.contains($0.key) }.values.sorted()
+        if !added.isEmpty {
+            statusBanner = "New game ready: \(added.joined(separator: ", "))"
+        }
+        if !isKnownGame(selectedAppID), let firstID = installedApps.keys.sorted().first ?? standaloneGames.first?.id {
+            loadProfile(for: firstID)
+        }
+    }
+
+    func isKnownGame(_ appID: UInt32) -> Bool {
+        installedApps[appID] != nil || isStandalone(appID)
+    }
+
+    func isStandalone(_ appID: UInt32) -> Bool {
+        standaloneGame(for: appID) != nil
+    }
+
+    func standaloneGame(for appID: UInt32) -> StandaloneGame? {
+        standaloneGames.first { $0.id == appID }
+    }
+
+    func displayTitle(for appID: UInt32) -> String {
+        standaloneGame(for: appID)?.title ?? installedApps[appID] ?? "Steam Game (\(appID))"
+    }
+
+    /// Preset synthesized by inspecting the game's files; cached because folder scans are slow.
+    func detectedEntry(for appID: UInt32, title: String) -> PresetCatalogEntry {
+        if let cached = detectedCache[appID] { return cached }
+        let entry: PresetCatalogEntry
+        if let game = standaloneGame(for: appID) {
+            let raw = SteamLibraryDiscovery.autoDetectPreset(forAppID: appID, title: game.title, gameDirectory: game.gameDirectory)
+            entry = PresetCatalogEntry(
+                info: GamePresetInfo(
+                    appID: appID,
+                    title: game.title,
+                    subtitle: "Non-Steam • \(raw.info.subtitle)",
+                    recommendedSummary: raw.info.recommendedSummary,
+                    notes: raw.info.notes
+                ),
+                recommendedProfile: raw.recommendedProfile
+            )
+        } else {
+            entry = SteamLibraryDiscovery.autoDetectPreset(forAppID: appID, title: title, in: libraries)
+        }
+        detectedCache[appID] = entry
+        return entry
+    }
+
+    // MARK: - Fix switches
+
+    func isFixEnabled(_ id: String) -> Bool {
+        editingProfile.isFixEnabled(id)
+    }
+
+    func setFix(_ id: String, enabled: Bool) {
+        var disabled = Set(editingProfile.disabledFixes)
+        if enabled {
+            disabled.remove(id)
+        } else {
+            disabled.insert(id)
+        }
+        editingProfile.disabledFixes = disabled.sorted()
+    }
+
+    // MARK: - Launching
+
+    /// Steam games: applies the preset, then asks Steam to start the game.
+    /// Non-Steam games: saves the preset and launches through the Positron compatibility tool.
+    func playSelectedGame() {
+        if let game = standaloneGame(for: selectedAppID) {
+            launchStandalone(game)
+            return
+        }
+        guard saveCurrentProfile(), let url = URL(string: "steam://rungameid/\(selectedAppID)") else { return }
+        NSWorkspace.shared.open(url)
+        statusBanner = "Starting \(selectedPresetInfo.title) in Steam with its Positron preset."
+    }
+
+    func launchStandalone(_ game: StandaloneGame) {
+        editingProfile = editingProfile.sanitized()
+        do {
+            try profileStore.save(editingProfile)
+            SteamIntegration.syncBundledFixesAndTools(runners: runners)
+            let tool = editingProfile.resolvedCompatToolName(among: runners)
+            try StandaloneGameStore.launch(game, toolName: tool)
+            statusBanner = "Launching \(game.title) with \(tool). Log: Positron/prefixes/\(game.id)/notproton-run.log"
+        } catch {
+            statusBanner = "Could not launch \(game.title): \(error.localizedDescription)"
+        }
+    }
+
+    func addStandaloneGame() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [UTType(filenameExtension: "exe")].compactMap { $0 }
+        panel.prompt = "Add Game"
+        panel.message = "Choose the Windows game executable (.exe) to run with Positron."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let game = try StandaloneGameStore.add(executable: url)
+            rescanLibraries()
+            loadProfile(for: game.id)
+            statusBanner = "Added \(game.title). Check its preset, then press Launch Game."
+        } catch {
+            statusBanner = "Could not add game: \(error.localizedDescription)"
+        }
+    }
+
+    func removeSelectedStandaloneGame() {
+        guard let game = standaloneGame(for: selectedAppID) else { return }
+        do {
+            try StandaloneGameStore.remove(id: game.id)
+        } catch {
+            statusBanner = "Could not remove \(game.title): \(error.localizedDescription)"
+            return
+        }
+        profileStore.removeProfile(forAppID: game.id)
+        rescanLibraries()
+        if let firstID = installedApps.keys.sorted().first ?? standaloneGames.first?.id {
+            loadProfile(for: firstID)
+        }
+        statusBanner = "Removed \(game.title) from Positron. Its prefix in Positron/prefixes/\(game.id) was kept."
+    }
+
+    func openKofiSupport() {
+        if let url = URL(string: funding.kofiURL) {
+            NSWorkspace.shared.open(url)
+            statusBanner = "Opened Ko-fi support page in browser. Thank you for supporting Positron!"
+        }
+    }
+
+    func openGitHubSponsors() {
+        if let url = URL(string: funding.githubSponsorsURL) {
+            NSWorkspace.shared.open(url)
+            statusBanner = "Opened GitHub Sponsors page in browser. Thank you for supporting Positron!"
+        }
+    }
+
+    func openGitHubRepo() {
+        if let url = URL(string: funding.githubRepoURL) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     func badgeCount(for section: PositronSection) -> String? {
         switch section {
         case .installedGames:
-            return "\(installedApps.count)"
+            return "\(installedApps.count + standaloneGames.count)"
         case .steamSetup:
             return steamState.isPositronInjected ? "ON" : nil
         case .engines:

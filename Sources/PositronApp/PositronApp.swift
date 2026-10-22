@@ -91,5 +91,22 @@ struct PositronAppMain: App {
         }
         .windowResizability(.contentMinSize)
         .windowStyle(.hiddenTitleBar)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Divider()
+                Button("Support Positron ❤️…") {
+                    viewModel.showSupportSheet = true
+                }
+                .keyboardShortcut("D", modifiers: [.command, .shift])
+
+                Button("Buy a Coffee on Ko-fi…") {
+                    viewModel.openKofiSupport()
+                }
+
+                Button("Sponsor on GitHub…") {
+                    viewModel.openGitHubSponsors()
+                }
+            }
+        }
     }
 }

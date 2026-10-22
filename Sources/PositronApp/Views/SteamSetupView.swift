@@ -133,6 +133,50 @@ struct SteamSetupView: View {
                     }
                 }
 
+                // Voluntary Support Card (Ko-fi & GitHub Sponsors)
+                HStack(spacing: 14) {
+                    Image(systemName: "heart.fill")
+                        .font(.title2)
+                        .foregroundStyle(Color.pink)
+                        .frame(width: 40, height: 40)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.pink.opacity(0.15))
+                        )
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 7) {
+                            Text("Support Positron Development")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(PositronTheme.primaryText(colorScheme))
+                            BadgePill(text: "FREE & OPEN SOURCE", color: .cyan)
+                        }
+                        Text("Positron is free software. If it helped you run your Windows games on macOS, you can support ongoing development via Ko-fi or GitHub Sponsors.")
+                            .font(.caption)
+                            .foregroundStyle(PositronTheme.secondaryText(colorScheme))
+                    }
+
+                    Spacer()
+
+                    HStack(spacing: 8) {
+                        Button {
+                            vm.openKofiSupport()
+                        } label: {
+                            Label("Ko-fi ☕️", systemImage: "cup.and.saucer.fill")
+                        }
+                        .glassActionButton()
+
+                        Button {
+                            vm.openGitHubSponsors()
+                        } label: {
+                            Label("GitHub Sponsors", systemImage: "heart.fill")
+                        }
+                        .glassActionButton()
+                    }
+                }
+                .padding(16)
+                .glassCard(cornerRadius: 14, tint: .purple)
+
                 DisclosureGroup("Advanced Steam Integration Settings", isExpanded: $showAdvanced) {
                     VStack(alignment: .leading, spacing: 12) {
                         Toggle(

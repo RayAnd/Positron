@@ -136,6 +136,9 @@ struct InstalledGamesView: View {
                                                 if hasPfx {
                                                     BadgePill(text: "PREFIX", color: .green)
                                                 }
+                                                if vm.isStandalone(game.appID) {
+                                                    BadgePill(text: "NON-STEAM", color: .orange)
+                                                }
                                             }
                                         }
                                         Spacer(minLength: 0)
@@ -163,9 +166,18 @@ struct InstalledGamesView: View {
                 // Catalog Footer Card
                 VStack(spacing: 7) {
                     Button {
+                        vm.addStandaloneGame()
+                    } label: {
+                        Label("Add Non-Steam Game…", systemImage: "plus.app.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .glassActionButton()
+                    .controlSize(.small)
+
+                    Button {
                         showLibrarySheet = true
                     } label: {
-                        Label("Browse \(GameQuirksDatabase.catalog.count)+ Curated Game Presets", systemImage: "books.vertical.fill")
+                        Label("Browse \(GameQuirksDatabase.catalog.count) Game Presets", systemImage: "books.vertical.fill")
                             .frame(maxWidth: .infinity)
                     }
                     .glassActionButton()
@@ -293,19 +305,48 @@ struct InstalledGamesView: View {
                             Spacer(minLength: 8)
 
                             VStack(alignment: .trailing, spacing: 6) {
+                                let isNonSteam = vm.isStandalone(info.appID)
+                                let needsSave = vm.hasUnsavedProfileEdits || !isApplied
                                 Button {
-                                    vm.saveCurrentProfile()
+                                    vm.playSelectedGame()
                                 } label: {
                                     Label(
-                                        isApplied ? "Update Preset in Steam" : "Apply Preset to Steam",
-                                        systemImage: "checkmark.circle.fill"
+                                        isNonSteam
+                                            ? "Launch Game"
+                                            : (needsSave ? "Apply & Play in Steam" : "Play in Steam"),
+                                        systemImage: "play.fill"
                                     )
                                     .fontWeight(.semibold)
                                 }
                                 .buttonStyle(.borderedProminent)
+                                .tint(.green)
                                 .controlSize(.large)
+                                .help(isNonSteam ? "Save the preset and start the game with Positron" : "Automatically applies your preset to Steam and launches the game")
 
-                                if isApplied {
+                                Button {
+                                    vm.saveCurrentProfile()
+                                } label: {
+                                    Label(
+                                        isNonSteam
+                                            ? (needsSave ? "Save Preset" : "Preset Saved ✓")
+                                            : (needsSave ? (isApplied ? "Apply Changes to Steam" : "Apply Preset to Steam") : "Preset Applied in Steam ✓"),
+                                        systemImage: "checkmark.circle.fill"
+                                    )
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(needsSave ? .cyan : .secondary)
+                                .controlSize(.regular)
+
+                                if isNonSteam {
+                                    Button(role: .destructive) {
+                                        vm.removeSelectedStandaloneGame()
+                                    } label: {
+                                        Label("Remove Game", systemImage: "trash")
+                                            .font(.caption)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                } else if isApplied {
                                     Button(role: .destructive) {
                                         vm.removeCurrentProfileFromSteam()
                                     } label: {
@@ -343,7 +384,7 @@ struct InstalledGamesView: View {
                                     .font(.system(size: 12, weight: .bold))
                                     .foregroundStyle(PositronTheme.accentCyan(colorScheme))
                                 BadgePill(
-                                    text: isCurated ? "CURATED LIBRARY" : "AUTO-ANALYZED PE",
+                                    text: GameQuirksDatabase.isHandTuned(info.appID) ? "HAND-TUNED" : (isCurated ? "ENGINE PRESET" : "AUTO-ANALYZED PE"),
                                     color: isCurated ? .cyan : .purple
                                 )
                             }
@@ -471,9 +512,31 @@ struct InstalledGamesView: View {
                                 }
                             }
 
+                            HStack {
+                                Text("Sync Mode")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(PositronTheme.secondaryText(colorScheme))
+                                Spacer()
+                                Picker("", selection: $vm.editingProfile.sync) {
+                                    ForEach(SyncPrimitive.allCases, id: \.self) { syncMode in
+                                        Text(syncMode.rawValue.uppercased()).tag(syncMode)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                .frame(maxWidth: 220)
+                            }
+
+                            GameFixesPanel(vm: vm)
+
                             Divider().opacity(0.5)
 
                             VStack(spacing: 7) {
+                                FeatureToggleCard(
+                                    title: "Launch in Fullscreen",
+                                    subtitle: "Start game in fullscreen at full display resolution",
+                                    icon: "arrow.up.left.and.arrow.down.right",
+                                    isOn: $vm.editingProfile.fullscreenMode
+                                )
                                 FeatureToggleCard(
                                     title: "Retina High-DPI Mode",
                                     subtitle: "Render at native macOS Retina pixel density",
@@ -802,3 +865,127 @@ struct PresetLibraryBrowserSheet: View {
     }
 }
 
+
+// MARK: - Switchable Game Fixes
+
+struct GameFixesPanel: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Bindable var vm: PositronViewModel
+
+    private func binding(_ id: String) -> Binding<Bool> {
+        Binding(
+            get: { vm.isFixEnabled(id) },
+            set: { vm.setFix(id, enabled: $0) }
+        )
+    }
+
+    private func dllDetail(_ mode: String) -> String {
+        switch mode {
+        case "d": return "Disabled: the game never loads this DLL"
+        case "b": return "Always use Wine's builtin version"
+        case "n": return "Always use the game's own version"
+        default: return "Prefer the game's own DLL, fall back to Wine's"
+        }
+    }
+
+    var body: some View {
+        let fixes = RuntimeFix.applicable(to: vm.selectedAppID)
+        let gameFixes = fixes.filter { $0.scope == .game }
+        let globalFixes = fixes.filter { $0.scope == .global }
+        let masterOn = vm.editingProfile.gameFixesEnabled
+        let dlls = vm.editingProfile.dllOverrides.keys.sorted()
+        let envKeys = vm.editingProfile.extraEnvironment.keys.sorted()
+
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Game Fixes")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(PositronTheme.secondaryText(colorScheme))
+
+            FeatureToggleCard(
+                title: "Game-Specific Fixes",
+                subtitle: "Master switch for this game's patches, DLL overrides and flags",
+                icon: "wrench.and.screwdriver.fill",
+                isOn: $vm.editingProfile.gameFixesEnabled
+            )
+
+            VStack(spacing: 5) {
+                ForEach(gameFixes) { fix in
+                    FixToggleRow(title: fix.title, detail: fix.detail, icon: "bandage.fill", isOn: binding(fix.id))
+                }
+                ForEach(dlls, id: \.self) { dll in
+                    let mode = vm.editingProfile.dllOverrides[dll] ?? ""
+                    FixToggleRow(
+                        title: "DLL \(dll) = \(mode)",
+                        detail: dllDetail(mode),
+                        icon: "puzzlepiece.extension.fill",
+                        isOn: binding(RuntimeFix.dllID(dll))
+                    )
+                }
+                ForEach(envKeys, id: \.self) { key in
+                    FixToggleRow(
+                        title: "\(key)=\(vm.editingProfile.extraEnvironment[key] ?? "")",
+                        detail: "Runtime flag for the graphics or Wine layer",
+                        icon: "gearshape.fill",
+                        isOn: binding(RuntimeFix.envID(key))
+                    )
+                }
+            }
+            .disabled(!masterOn)
+            .opacity(masterOn ? 1 : 0.45)
+
+            if !globalFixes.isEmpty {
+                Text("Launch Safeguards (every game)")
+                    .font(.system(size: 10.5, weight: .bold))
+                    .foregroundStyle(PositronTheme.mutedText(colorScheme))
+                    .padding(.top, 4)
+                ForEach(globalFixes) { fix in
+                    FixToggleRow(title: fix.title, detail: fix.detail, icon: "shield.lefthalf.filled", isOn: binding(fix.id))
+                }
+            }
+        }
+    }
+}
+
+struct FixToggleRow: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let title: String
+    let detail: String
+    let icon: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        let accent = PositronTheme.accentCyan(colorScheme)
+        HStack(spacing: 9) {
+            Image(systemName: icon)
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(isOn ? accent : PositronTheme.mutedText(colorScheme))
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(PositronTheme.primaryText(colorScheme))
+                    .lineLimit(1)
+                Text(detail)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(PositronTheme.secondaryText(colorScheme))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 6)
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(PositronTheme.tileFill(colorScheme, isSelected: false, accent: accent))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(PositronTheme.tileBorder(colorScheme, isSelected: false, accent: accent), lineWidth: 0.8)
+        )
+    }
+}

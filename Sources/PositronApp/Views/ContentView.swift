@@ -34,6 +34,10 @@ struct ContentView: View {
                         isSidebarVisible: $isSidebarVisible
                     )
 
+                    if !vm.steamState.isPositronInjected || vm.isBridgeUpdateNeeded {
+                        PositronActionBanner(vm: vm)
+                    }
+
                     Group {
                         switch vm.selectedSection {
                         case .installedGames:
@@ -83,6 +87,9 @@ struct ContentView: View {
         .ignoresSafeArea(.container, edges: .top)
         .background(WindowChromeConfigurator(colorScheme: colorScheme))
         .frame(minWidth: 1140, minHeight: 740)
+        .sheet(isPresented: $vm.showSupportSheet) {
+            SupportPositronSheet(vm: vm, isPresented: $vm.showSupportSheet)
+        }
     }
 }
 
@@ -208,10 +215,17 @@ struct PositronSidebarColumn: View {
             // Sidebar Quick Footer
             VStack(spacing: 8) {
                 Button {
-                    vm.launchSteamTemporaryMode()
+                    vm.openOrSyncSteam()
                 } label: {
-                    Label("Launch Steam", systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
+                    Label(
+                        !vm.steamState.isPositronInjected
+                            ? "Enable in Steam"
+                            : (vm.isBridgeUpdateNeeded ? "Update & Restart Steam" : "Open Steam"),
+                        systemImage: !vm.steamState.isPositronInjected
+                            ? "bolt.shield.fill"
+                            : (vm.isBridgeUpdateNeeded ? "arrow.triangle.2.circlepath.circle.fill" : "play.fill")
+                    )
+                    .frame(maxWidth: .infinity)
                 }
                 .glassActionButton(prominent: true)
                 .controlSize(.regular)
@@ -225,15 +239,17 @@ struct PositronSidebarColumn: View {
                     }
                     .glassActionButton()
                     .controlSize(.small)
+                    .help("Rescan Steam libraries and prefixes")
 
                     Button {
                         vm.enableInSteam()
                     } label: {
-                        Label("Sync Bridge", systemImage: "bolt.fill")
+                        Label("Restart Steam", systemImage: "arrow.triangle.2.circlepath")
                             .frame(maxWidth: .infinity)
                     }
                     .glassActionButton()
                     .controlSize(.small)
+                    .help("Update Positron bridge in Steam.app and restart Steam automatically")
                 }
             }
             .padding(10)
@@ -331,6 +347,31 @@ struct PositronTopNavigationBar: View {
                 icon: vm.steamState.isPositronInjected ? "checkmark.shield.fill" : "bolt.fill"
             )
 
+            Button {
+                vm.showSupportSheet = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 9.5, weight: .bold))
+                        .foregroundStyle(Color.pink)
+                    Text("Support")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(PositronTheme.primaryText(colorScheme))
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule()
+                        .fill(Color.pink.opacity(colorScheme == .dark ? 0.18 : 0.12))
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(Color.pink.opacity(0.45), lineWidth: 0.9)
+                )
+            }
+            .buttonStyle(.plain)
+            .help("Support Positron (Ko-fi & GitHub Sponsors)")
+
             // Appearance Mode Switcher Pill (Auto / Light / Dark)
             HStack(spacing: 2) {
                 AppearanceModeButton(
@@ -407,5 +448,195 @@ private struct AppearanceModeButton: View {
             )
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Guided One-Click Action Banner
+
+struct PositronActionBanner: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Bindable var vm: PositronViewModel
+
+    var body: some View {
+        let isUpdate = vm.steamState.isPositronInjected && vm.isBridgeUpdateNeeded
+        let accent = isUpdate ? PositronTheme.accentCyan(colorScheme) : PositronTheme.accentOrange(colorScheme)
+        HStack(spacing: 12) {
+            Image(systemName: isUpdate ? "arrow.triangle.2.circlepath.circle.fill" : "bolt.shield.fill")
+                .font(.title3.weight(.bold))
+                .foregroundStyle(accent)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isUpdate ? "Positron Bridge Update Ready" : "Step 1: Enable Positron in Steam")
+                    .font(.system(size: 12.5, weight: .bold))
+                    .foregroundStyle(PositronTheme.primaryText(colorScheme))
+                Text(
+                    isUpdate
+                        ? "A newer Steam bridge and launch scripts are ready. Click once to update Steam.app and restart Steam automatically."
+                        : "Click once to install the Positron compatibility bridge into Steam.app and restart Steam automatically."
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(PositronTheme.secondaryText(colorScheme))
+            }
+
+            Spacer()
+
+            Button {
+                vm.enableInSteam()
+            } label: {
+                Label(
+                    isUpdate ? "Update & Restart Steam" : "Enable Positron in Steam",
+                    systemImage: isUpdate ? "arrow.triangle.2.circlepath" : "bolt.fill"
+                )
+                .fontWeight(.semibold)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(accent.opacity(colorScheme == .dark ? 0.14 : 0.10))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(accent.opacity(0.35))
+                .frame(height: 1)
+        }
+    }
+}
+
+// MARK: - Voluntary Contributions Sheet (Ko-fi & GitHub Sponsors)
+
+struct SupportPositronSheet: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Bindable var vm: PositronViewModel
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.pink.opacity(0.16))
+                        .frame(width: 52, height: 52)
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundStyle(Color.pink)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Text("Support Positron")
+                            .font(.system(.title3, design: .rounded, weight: .bold))
+                            .foregroundStyle(PositronTheme.primaryText(colorScheme))
+                        BadgePill(text: "100% FREE & OPEN SOURCE", color: .cyan)
+                    }
+                    Text("Positron is completely free—no ads, no paywalls, and no subscriptions. If it helped you play your Windows library on your Mac, voluntary tips help fund testing and new game fixes.")
+                        .font(.caption)
+                        .foregroundStyle(PositronTheme.secondaryText(colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer()
+            }
+
+            VStack(spacing: 10) {
+                // Option 1: Ko-fi
+                HStack(spacing: 14) {
+                    Image(systemName: "cup.and.saucer.fill")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(PositronTheme.accentOrange(colorScheme))
+                        .frame(width: 40, height: 40)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(PositronTheme.accentOrange(colorScheme).opacity(0.15))
+                        )
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text("Buy a Coffee on Ko-fi")
+                                .font(.system(size: 13.5, weight: .bold))
+                                .foregroundStyle(PositronTheme.primaryText(colorScheme))
+                            BadgePill(text: "APPLE PAY • NO LOGIN", color: .orange)
+                        }
+                        Text("Quick one-time contribution via Apple Pay, card, or PayPal with 0% platform fee.")
+                            .font(.caption)
+                            .foregroundStyle(PositronTheme.secondaryText(colorScheme))
+                        Text(vm.funding.kofiURL)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(PositronTheme.mutedText(colorScheme))
+                    }
+
+                    Spacer()
+
+                    Button {
+                        vm.openKofiSupport()
+                    } label: {
+                        Label("Open Ko-fi", systemImage: "arrow.up.right")
+                            .fontWeight(.semibold)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+                }
+                .padding(14)
+                .glassCard(cornerRadius: 13, tint: .orange)
+
+                // Option 2: GitHub Sponsors
+                HStack(spacing: 14) {
+                    Image(systemName: "heart.circle.fill")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(PositronTheme.accentPurple(colorScheme))
+                        .frame(width: 40, height: 40)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(PositronTheme.accentPurple(colorScheme).opacity(0.15))
+                        )
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text("Sponsor on GitHub")
+                                .font(.system(size: 13.5, weight: .bold))
+                                .foregroundStyle(PositronTheme.primaryText(colorScheme))
+                            BadgePill(text: "0% FEES", color: .purple)
+                        }
+                        Text("One-time or monthly sponsorship directly through your GitHub account.")
+                            .font(.caption)
+                            .foregroundStyle(PositronTheme.secondaryText(colorScheme))
+                        Text(vm.funding.githubSponsorsURL)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(PositronTheme.mutedText(colorScheme))
+                    }
+
+                    Spacer()
+
+                    Button {
+                        vm.openGitHubSponsors()
+                    } label: {
+                        Label("GitHub Sponsors", systemImage: "arrow.up.right")
+                            .fontWeight(.semibold)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                }
+                .padding(14)
+                .glassCard(cornerRadius: 13, tint: .purple)
+            }
+
+            HStack {
+                Button {
+                    vm.openGitHubRepo()
+                } label: {
+                    Label("Star Positron on GitHub", systemImage: "star.fill")
+                }
+                .glassActionButton()
+
+                Spacer()
+
+                Button("Done") {
+                    isPresented = false
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(22)
+        .frame(width: 580)
     }
 }
