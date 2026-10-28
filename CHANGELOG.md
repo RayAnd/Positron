@@ -2,6 +2,15 @@
 
 All notable changes to **Positron** are documented in this file.
 
+## [2.1.0] - 2026-10-28
+
+### Added
+- **External Positron Storage & APFS Sparse Disk Images (`PositronStorageManager`)**:
+  - Move all large Positron support directories (`prefixes`, `runners`, `external-prefixes`, `bridge`, `fonts`, `launchers`, and `shortcut-icons`) off your internal Mac SSD onto any external drive.
+  - **Automatic APFS Sparse Disk Image (`.sparsebundle`) on `ExFAT` Drives**: Automatically creates, mounts, and manages a dynamic `PositronStorage.sparsebundle` APFS volume when an `ExFAT` external drive is chosen—preserving native POSIX symlinks, hardlinks, permissions, and zero-copy APFS `clonefile` prefix templates while using zero internal SSD space.
+  - **Automatic Mounting at Launch**: Both `Positron.app` (on startup and USB drive attach) and `compat_run.sh` (on Steam game launch) automatically mount `PositronStorage.sparsebundle`, and alert clearly if the external drive is disconnected.
+  - **Storage Dashboard in `Steam Drives`**: Displays total Positron storage size, free drive capacity, per-folder usage breakdown, one-click **Move Positron Storage to External Drive…**, **Compact Disk Image** (`hdiutil compact`), **Clean Old Backups** (`pfx.previous-*`), and **Move Back to Internal SSD**.
+
 ## [2.0.0] - 2026-10-22
 
 ### Added

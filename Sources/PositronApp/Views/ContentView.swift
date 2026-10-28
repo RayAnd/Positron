@@ -131,7 +131,7 @@ struct PositronSidebarColumn: View {
                         Text("Positron")
                             .font(.system(.headline, design: .rounded, weight: .bold))
                             .foregroundStyle(PositronTheme.primaryText(colorScheme))
-                        BadgePill(text: "2.0", color: .cyan)
+                        BadgePill(text: "2.1", color: .cyan)
                     }
                     HStack(spacing: 5) {
                         Circle()

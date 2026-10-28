@@ -380,4 +380,71 @@ struct PositronCoreTests {
         #expect(!SteamLibraryDiscovery.isFullyInstalled(manifestAt: downloading))
         #expect(SteamLibraryDiscovery.isFullyInstalled(manifestAt: installed))
     }
+
+    @Test("PositronStorageManager relocates support directories to external folder and APFS sparsebundle and restores cleanly")
+    func externalStorageAndSparseBundleRelocation() throws {
+        let fm = FileManager.default
+        let sandbox = fm.temporaryDirectory.appending(path: "positron-storage-test-\(UUID().uuidString)")
+        let fakeSupport = sandbox.appending(path: "InternalSupport")
+        let fakeExternalDrive = sandbox.appending(path: "ExternalDrive")
+        try fm.createDirectory(at: fakeSupport.appending(path: "prefixes/1151340/pfx"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: fakeSupport.appending(path: "prefixes/1151340/pfx.previous-20261022"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: fakeSupport.appending(path: "runners/crossover-26.3"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: fakeSupport.appending(path: "launchers/1151340"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: fakeExternalDrive, withIntermediateDirectories: true)
+
+        let saveMarker = fakeSupport.appending(path: "prefixes/1151340/pfx/save.txt")
+        let oldBackup = fakeSupport.appending(path: "prefixes/1151340/pfx.previous-20261022/old.bin")
+        let iconMarker = fakeSupport.appending(path: "launchers/1151340/game.icns")
+        try Data("VAULT_76_SAVE".utf8).write(to: saveMarker)
+        try Data(repeating: 0xAA, count: 8192).write(to: oldBackup)
+        try Data("ICON_DATA".utf8).write(to: iconMarker)
+
+        defer {
+            let mountURL = fakeSupport.appending(path: ".mounted-storage")
+            if PositronStorageManager.isMountPointActive(mountURL) {
+                let p = Process()
+                p.executableURL = URL(filePath: "/usr/bin/hdiutil")
+                p.arguments = ["detach", mountURL.path(percentEncoded: false), "-force"]
+                try? p.run()
+                p.waitUntilExit()
+            }
+            try? fm.removeItem(at: sandbox)
+        }
+
+        // 1. Relocate to an APFS Sparse Disk Image (.sparsebundle) — simulating an ExFAT external drive
+        let sparseCfg = try PositronStorageManager.relocateStorage(
+            to: fakeExternalDrive,
+            preferSparseBundle: true,
+            maxImageSizeGB: 2,
+            baseSupportDir: fakeSupport
+        )
+        #expect(sparseCfg.mode == .externalSparseBundle)
+        #expect(sparseCfg.externalContainerPath?.hasSuffix("PositronStorage.sparsebundle") == true)
+        #expect(PositronStorageManager.isMountPointActive(fakeSupport.appending(path: ".mounted-storage")))
+
+        // Internal prefixes & launchers paths are now symlinks, and data is readable through them
+        var st = stat()
+        #expect(lstat(fakeSupport.appending(path: "prefixes").path(percentEncoded: false), &st) == 0)
+        #expect((st.st_mode & S_IFMT) == S_IFLNK)
+        #expect(try String(contentsOf: saveMarker, encoding: .utf8) == "VAULT_76_SAVE")
+        #expect(try String(contentsOf: iconMarker, encoding: .utf8) == "ICON_DATA")
+
+        let envFile = try String(contentsOf: fakeSupport.appending(path: "storage-env.sh"), encoding: .utf8)
+        #expect(envFile.contains("POSITRON_STORAGE_MODE=\"external-sparsebundle\""))
+
+        // 2. Clean old prefix backups inside the mounted sparsebundle
+        let freed = PositronStorageManager.cleanupOldPrefixBackups(baseSupportDir: fakeSupport)
+        #expect(freed > 0)
+        #expect(!fm.fileExists(atPath: oldBackup.path(percentEncoded: false)))
+        #expect(try String(contentsOf: saveMarker, encoding: .utf8) == "VAULT_76_SAVE")
+
+        // 3. Move back to Internal SSD and verify symlinks become real directories again with intact saves
+        try PositronStorageManager.moveBackToInternalSSD(baseSupportDir: fakeSupport)
+        #expect(!PositronStorageManager.isMountPointActive(fakeSupport.appending(path: ".mounted-storage")))
+        #expect(lstat(fakeSupport.appending(path: "prefixes").path(percentEncoded: false), &st) == 0)
+        #expect((st.st_mode & S_IFMT) == S_IFDIR)
+        #expect(try String(contentsOf: saveMarker, encoding: .utf8) == "VAULT_76_SAVE")
+        #expect(try String(contentsOf: iconMarker, encoding: .utf8) == "ICON_DATA")
+    }
 }

@@ -17,7 +17,7 @@ public enum PositronSection: String, CaseIterable, Identifiable {
         case .installedGames: return "Presets & Wine Prefixes"
         case .steamSetup: return "Bridge & Update Lock"
         case .engines: return "CrossOver & Wine Runtimes"
-        case .drives: return "APFS & External Libraries"
+        case .drives: return "Positron Storage & Libraries"
         }
     }
 
@@ -65,6 +65,17 @@ final class PositronViewModel {
     var isSteamRunning: Bool = false
     var showSupportSheet: Bool = false
     let funding = PositronFundingConfig.current()
+    var storageSnapshot: PositronStorageSnapshot = PositronStorageSnapshot(
+        config: PositronStorageManager.loadConfig(),
+        isDriveConnected: true,
+        isMounted: true,
+        totalBytes: 0,
+        backupBytes: 0,
+        availableVolumeBytes: nil,
+        items: []
+    )
+    var isStorageBusy: Bool = false
+    var storageBusyMessage: String = ""
 
     @ObservationIgnored private var detectedCache: [UInt32: PresetCatalogEntry] = [:]
     @ObservationIgnored private var libraryWatcher: SteamLibraryWatcher?
@@ -76,6 +87,7 @@ final class PositronViewModel {
             .appending(path: "Library/Application Support/Positron")
         self.profileStore = GameProfileStore(storageDirectory: support)
         self.customLibraryPaths = UserDefaults.standard.stringArray(forKey: "PositronCustomSteamLibraries") ?? []
+        _ = try? PositronStorageManager.ensureMounted()
         _ = GameQuirksDatabase.loadCustomCatalog()
         refreshAll()
         libraryWatcher = SteamLibraryWatcher { [weak self] in
@@ -207,6 +219,7 @@ final class PositronViewModel {
         loadProfile(for: selectedAppID)
         let extCount = libraries.filter(\.isExternal).count
         statusBanner = "\(steamState.summaryLabel) • \(installedApps.count) Windows Game(s) across \(libraries.count) Drive(s) (\(extCount) External)"
+        refreshStorageSnapshotAsync()
     }
 
     func addExternalSteamLibrary() {
@@ -469,6 +482,7 @@ final class PositronViewModel {
     /// Called by the watcher when a steamapps folder changes, a drive mounts, or the app comes forward.
     /// Keeps the current (possibly unsaved) preset edits.
     func refreshInstalledGames() {
+        _ = try? PositronStorageManager.ensureMounted()
         let before = Set(installedApps.keys)
         _ = SteamIntegration.autoUpdateSteamBridgeIfClosed(runners: runners)
         isSteamRunning = SteamIntegration.isSteamRunning()
@@ -480,6 +494,151 @@ final class PositronViewModel {
         }
         if !isKnownGame(selectedAppID), let firstID = installedApps.keys.sorted().first ?? standaloneGames.first?.id {
             loadProfile(for: firstID)
+        }
+        refreshStorageSnapshotAsync()
+    }
+
+    // MARK: - External Positron Storage & Sparse Disk Image Management
+
+    func refreshStorageSnapshotAsync() {
+        Task.detached {
+            let snap = PositronStorageManager.inspectStorage()
+            await MainActor.run { [weak self] in
+                self?.storageSnapshot = snap
+            }
+        }
+    }
+
+    func chooseAndMovePositronStorage() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [UTType.folder, UTType(filenameExtension: "sparsebundle"), UTType(filenameExtension: "sparseimage")].compactMap { $0 }
+        panel.prompt = "Use for Positron Storage"
+        panel.message = "Select an external drive or folder (ExFAT drives automatically create an APFS PositronStorage.sparsebundle image), or choose an existing .sparsebundle."
+        panel.directoryURL = URL(filePath: "/Volumes")
+        guard panel.runModal() == .OK, let destURL = panel.url else { return }
+
+        isStorageBusy = true
+        storageBusyMessage = "Moving Positron prefixes, runners, icons & support files to \(destURL.lastPathComponent)… Keep drive connected."
+        statusBanner = storageBusyMessage
+
+        Task.detached {
+            do {
+                let newConfig = try PositronStorageManager.relocateStorage(to: destURL) { msg in
+                    Task { @MainActor [weak self] in
+                        self?.storageBusyMessage = msg
+                        self?.statusBanner = msg
+                    }
+                }
+                let snap = PositronStorageManager.inspectStorage()
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.isStorageBusy = false
+                    self.storageBusyMessage = ""
+                    self.storageSnapshot = snap
+                    self.refreshAll()
+                    self.statusBanner = "Moved Positron storage to \(newConfig.externalContainerPath ?? destURL.path(percentEncoded: false)) (\(newConfig.mode.displayTitle))."
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.isStorageBusy = false
+                    self.storageBusyMessage = ""
+                    self.statusBanner = "Storage migration failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func movePositronStorageBackToInternal() {
+        isStorageBusy = true
+        storageBusyMessage = "Moving Positron support files back to Internal Mac SSD…"
+        statusBanner = storageBusyMessage
+
+        Task.detached {
+            do {
+                try PositronStorageManager.moveBackToInternalSSD { msg in
+                    Task { @MainActor [weak self] in
+                        self?.storageBusyMessage = msg
+                        self?.statusBanner = msg
+                    }
+                }
+                let snap = PositronStorageManager.inspectStorage()
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.isStorageBusy = false
+                    self.storageBusyMessage = ""
+                    self.storageSnapshot = snap
+                    self.refreshAll()
+                    self.statusBanner = "Restored Positron storage to Internal Mac SSD."
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.isStorageBusy = false
+                    self.storageBusyMessage = ""
+                    self.statusBanner = "Restore to Internal SSD failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func mountExternalPositronStorage() {
+        do {
+            let ok = try PositronStorageManager.ensureMounted()
+            refreshAll()
+            statusBanner = ok
+                ? "Mounted external Positron storage."
+                : "External storage drive is not connected."
+        } catch {
+            statusBanner = "Mount failed: \(error.localizedDescription)"
+        }
+    }
+
+    func compactExternalPositronImage() {
+        isStorageBusy = true
+        storageBusyMessage = "Compacting APFS sparse disk image to reclaim unused external drive space…"
+        statusBanner = storageBusyMessage
+
+        Task.detached {
+            do {
+                try PositronStorageManager.compactSparseBundle()
+                let snap = PositronStorageManager.inspectStorage()
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.isStorageBusy = false
+                    self.storageBusyMessage = ""
+                    self.storageSnapshot = snap
+                    self.statusBanner = "Compacted PositronStorage.sparsebundle successfully."
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.isStorageBusy = false
+                    self.storageBusyMessage = ""
+                    self.statusBanner = "Compact failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func cleanupOldBackups() {
+        isStorageBusy = true
+        storageBusyMessage = "Removing old prefix snapshots (pfx.previous-*)…"
+        Task.detached {
+            let freed = PositronStorageManager.cleanupOldPrefixBackups()
+            let snap = PositronStorageManager.inspectStorage()
+            let formatted = ByteCountFormatter.string(fromByteCount: Int64(freed), countStyle: .file)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.isStorageBusy = false
+                self.storageBusyMessage = ""
+                self.storageSnapshot = snap
+                self.refreshAll()
+                self.statusBanner = "Cleaned old prefix backups and reclaimed \(formatted)."
+            }
         }
     }
 

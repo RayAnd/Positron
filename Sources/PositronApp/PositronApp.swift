@@ -68,8 +68,24 @@ enum PositronScreenshotExporter {
     }
 }
 
+final class PositronAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard PositronMigrationGuard.shared.isBusy else {
+            return .terminateNow
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Storage Migration in Progress"
+        alert.informativeText = "Positron is currently copying support files to external storage. Quitting now will cancel the copy (your existing files remain safe)."
+        alert.addButton(withTitle: "Continue Moving Files")
+        alert.addButton(withTitle: "Cancel & Quit")
+        return alert.runModal() == .alertFirstButtonReturn ? .terminateCancel : .terminateNow
+    }
+}
+
 @main
 struct PositronAppMain: App {
+    @NSApplicationDelegateAdaptor(PositronAppDelegate.self) private var appDelegate
     @State private var viewModel = PositronViewModel()
 
     init() {

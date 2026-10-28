@@ -20,6 +20,32 @@ esac
 np_support="$HOME/Library/Application Support/Positron"
 iconmaker="$np_support/iconmaker"
 
+# Auto-mount external Positron storage (APFS sparsebundle on ExFAT or external APFS folder) if configured.
+if [ -r "$np_support/storage-env.sh" ]; then
+  . "$np_support/storage-env.sh"
+  if [ "${POSITRON_STORAGE_MODE:-internal}" = "external-sparsebundle" ] \
+    && [ -n "${POSITRON_STORAGE_CONTAINER:-}" ] && [ -n "${POSITRON_STORAGE_ROOT:-}" ]; then
+    mkdir -p "$POSITRON_STORAGE_ROOT" 2>/dev/null || true
+    parent_dev=$(stat -f %d "$(dirname "$POSITRON_STORAGE_ROOT")" 2>/dev/null || echo 0)
+    mount_dev=$(stat -f %d "$POSITRON_STORAGE_ROOT" 2>/dev/null || echo 0)
+    if [ "$mount_dev" = "$parent_dev" ]; then
+      if [ ! -e "$POSITRON_STORAGE_CONTAINER" ]; then
+        if [ "$verb" != getcompatpath ] && [ "$verb" != run ]; then
+          osascript -e "display alert \"Positron External Storage Not Connected\" message \"Connect the external drive containing ${POSITRON_STORAGE_CONTAINER} and click Play again.\" as critical" >/dev/null 2>&1 || true
+        fi
+        exit 1
+      fi
+      /usr/bin/hdiutil attach -nobrowse -mountpoint "$POSITRON_STORAGE_ROOT" "$POSITRON_STORAGE_CONTAINER" >/dev/null 2>&1 || true
+    fi
+  elif [ "${POSITRON_STORAGE_MODE:-internal}" = "external-folder" ] \
+    && [ -n "${POSITRON_STORAGE_ROOT:-}" ] && [ ! -d "$POSITRON_STORAGE_ROOT" ]; then
+    if [ "$verb" != getcompatpath ] && [ "$verb" != run ]; then
+      osascript -e "display alert \"Positron External Storage Not Connected\" message \"Connect the external drive containing ${POSITRON_STORAGE_ROOT} and click Play again.\" as critical" >/dev/null 2>&1 || true
+    fi
+    exit 1
+  fi
+fi
+
 # Positron fix switches, set per game in Positron.app and exported by profiles/<appid>.env.
 # POSITRON_DISABLED_FIXES lists fix ids that are off; POSITRON_GAME_FIXES=0 turns off every
 # game-specific fix while the global safeguards keep their own switches.

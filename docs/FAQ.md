@@ -76,7 +76,14 @@ You can also click **Save to Catalog** in the **Installed Games** footer to save
 
 ---
 
-## 5. External Drives (ExFAT & APFS)
+## 5. External Drives (ExFAT & APFS) & Moving Positron Storage Off Internal SSD
+
+### Positron's support folder (`~/Library/Application Support/Positron`) is growing to 15+ GB—can I move all prefixes, runners, and images to an external drive?
+**Yes!** Open **`Positron.app` → Steam Drives** and use the **Positron Support Files & Disk Image Storage** card at the top:
+- Click **Move Positron Storage to External Drive…** and select any external drive (even an **`ExFAT`** drive) or an existing `.sparsebundle`.
+- **Automatic APFS Sparse Disk Image on ExFAT**: If your external drive is formatted as `ExFAT`, Positron automatically creates and mounts a dynamic `PositronStorage.sparsebundle` APFS disk image on that drive (`~/Library/Application Support/Positron/.mounted-storage`), moves all heavy folders (`prefixes`, `runners`, `external-prefixes`, `bridge`, `fonts`, `launchers`, `shortcut-icons`) into it, and replaces the internal folders with lightweight symlinks.
+- **Zero Space Wasted**: The sparse disk image only uses the actual space of the files inside it, supports one-click **Compact Disk Image** (`hdiutil compact`) and **Clean Old Backups**, and is automatically mounted whenever `Positron.app` opens or Steam launches a game (`compat_run.sh`).
+- You can also click **Move Back to Internal SSD** at any time to copy everything back cleanly.
 
 ### Why did my game crash or cause a kernel panic on an ExFAT external drive before Positron?
 Two macOS behaviors break Windows games on `ExFAT` external drives:
