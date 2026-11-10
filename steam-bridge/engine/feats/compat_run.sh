@@ -1623,22 +1623,43 @@ if [ "$verb" = waitforexitandrun ] && game_fix_on rdr2-anti-flicker && { [ "$app
 fi
 
 # Automatic runtime fix for Fallout 76 (AppID 1151340):
-# Honors Positron's NOTPROTON_FULLSCREEN setting (default 1 = Fullscreen at full resolution, 0 = Windowed)
-# without shrinking the user's in-game resolution to 2560x1440.
-if [ "$verb" = waitforexitandrun ] && game_fix_on fo76-display-prefs && { [ "$app_id" = "1151340" ] || [ -f "$STEAM_COMPAT_INSTALL_PATH/Fallout76.exe" ]; }; then
+# 1. fo76-perf-tweaks: Disables Bethesda's internal VSync (iPresentInterval=0) to eliminate
+#    micro-stutter and 30 FPS drops, coordinates 60 FPS Metal CoreAnimation pacing (DXMT_CONFIG),
+#    optimizes shadow distance (fShadowDistance=60000) and volumetric lighting (bVolumetricLightingEnable=0),
+#    and caps tessellation factor (d3d11.maxTessFactor=16).
+# 2. fo76-display-prefs: Honors Positron's NOTPROTON_FULLSCREEN setting without overriding
+#    the user's chosen in-game resolution.
+if [ "$verb" = waitforexitandrun ] && { [ "$app_id" = "1151340" ] || [ -f "$STEAM_COMPAT_INSTALL_PATH/Fallout76.exe" ]; }; then
   fo76_prefs="$WINEPREFIX/drive_c/users/steamuser/Documents/My Games/Fallout 76/Fallout76Prefs.ini"
   if [ -f "$fo76_prefs" ]; then
-    if [ "${NOTPROTON_FULLSCREEN:-1}" = "1" ]; then
+    if game_fix_on fo76-perf-tweaks; then
+      export DXMT_CONFIG="${DXMT_CONFIG:-d3d11.maxFrameRate=60;d3d11.preferredMaxFrameRate=60;d3d11.maxTessFactor=16}"
+      if grep -q "^iPresentInterval=" "$fo76_prefs"; then
+        sed -i '' -e 's/^iPresentInterval=.*/iPresentInterval=0/' "$fo76_prefs" 2>/dev/null || true
+      fi
       sed -i '' \
-        -e 's/^bFull Screen=.*/bFull Screen=1/' \
-        -e 's/^iSize W=2560/iSize W=3840/' \
-        -e 's/^iSize H=1440/iSize H=2160/' \
+        -e 's/^fShadowDistance=.*/fShadowDistance=60000.0000/' \
+        -e 's/^fDirShadowDistance=.*/fDirShadowDistance=60000.0000/' \
+        -e 's/^iShadowMapResolution=4096/iShadowMapResolution=2048/' \
+        -e 's/^bVolumetricLightingEnable=.*/bVolumetricLightingEnable=0/' \
+        -e 's/^iVolumetricLightingTextureQuality=.*/iVolumetricLightingTextureQuality=0/' \
+        -e 's/^bDoDepthOfField=.*/bDoDepthOfField=0/' \
+        -e 's/^bMBEnable=.*/bMBEnable=0/' \
         "$fo76_prefs" 2>/dev/null || true
-    else
-      sed -i '' \
-        -e 's/^bFull Screen=.*/bFull Screen=0/' \
-        -e 's/^bBorderless=.*/bBorderless=1/' \
-        "$fo76_prefs" 2>/dev/null || true
+      echo "=== Fallout 76 perf fix: iPresentInterval=0 (VSync stutter disabled), 60 FPS Metal pacing, optimized shadows & volumetric lighting ===" >> "$log" 2>&1 || true
+    fi
+    if game_fix_on fo76-display-prefs; then
+      if [ "${NOTPROTON_FULLSCREEN:-1}" = "1" ]; then
+        sed -i '' \
+          -e 's/^bFull Screen=.*/bFull Screen=1/' \
+          -e 's/^bBorderless=.*/bBorderless=0/' \
+          "$fo76_prefs" 2>/dev/null || true
+      else
+        sed -i '' \
+          -e 's/^bFull Screen=.*/bFull Screen=0/' \
+          -e 's/^bBorderless=.*/bBorderless=1/' \
+          "$fo76_prefs" 2>/dev/null || true
+      fi
     fi
   fi
 fi

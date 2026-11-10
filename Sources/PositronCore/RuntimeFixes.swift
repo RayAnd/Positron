@@ -32,6 +32,11 @@ public struct RuntimeFix: Sendable, Identifiable, Equatable {
             scope: .game, appIDs: [1174180]
         ),
         RuntimeFix(
+            id: "fo76-perf-tweaks", title: "Fallout 76 smooth 60 FPS pacing & graphics optimization",
+            detail: "Disables Bethesda's VSync stutter lock (iPresentInterval=0), coordinates 60 FPS Metal pacing, optimizes shadow distance & volumetric lighting, and caps tessellation.",
+            scope: .game, appIDs: [1151340]
+        ),
+        RuntimeFix(
             id: "fo76-rosetta-pin", title: "Pin CrossOver 26.3 (Rosetta)",
             detail: "Fallout76.exe overflows its stack under FEX, so it always runs on 26.3 Rosetta.",
             scope: .game, appIDs: [1151340]

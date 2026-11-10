@@ -524,12 +524,13 @@ final class PositronViewModel {
         storageBusyMessage = "Moving Positron prefixes, runners, icons & support files to \(destURL.lastPathComponent)… Keep drive connected."
         statusBanner = storageBusyMessage
 
-        Task.detached {
+        Task.detached { [weak self] in
+            let vm = self
             do {
                 let newConfig = try PositronStorageManager.relocateStorage(to: destURL) { msg in
-                    Task { @MainActor [weak self] in
-                        self?.storageBusyMessage = msg
-                        self?.statusBanner = msg
+                    Task { @MainActor in
+                        vm?.storageBusyMessage = msg
+                        vm?.statusBanner = msg
                     }
                 }
                 let snap = PositronStorageManager.inspectStorage()
@@ -557,12 +558,13 @@ final class PositronViewModel {
         storageBusyMessage = "Moving Positron support files back to Internal Mac SSD…"
         statusBanner = storageBusyMessage
 
-        Task.detached {
+        Task.detached { [weak self] in
+            let vm = self
             do {
                 try PositronStorageManager.moveBackToInternalSSD { msg in
-                    Task { @MainActor [weak self] in
-                        self?.storageBusyMessage = msg
-                        self?.statusBanner = msg
+                    Task { @MainActor in
+                        vm?.storageBusyMessage = msg
+                        vm?.statusBanner = msg
                     }
                 }
                 let snap = PositronStorageManager.inspectStorage()

@@ -336,7 +336,7 @@ public enum GameQuirksDatabase {
     /// Presets tuned per game.
     private static let curatedCatalog: [GamePresetInfo] = [
         GamePresetInfo(appID: 292030, title: "The Witcher 3: Wild Hunt — Remastered", subtitle: "REDengine 3 • 64-bit DirectX 12 (Patch 5.0+)", recommendedSummary: "Rosetta 2 + D3DMetal (DX12) + Stream-Output PSO & SDR Fix", notes: "Automatically links bin/x64 -> x64_dx12, stages the stream-output PSO skip proxy (amd_fidelityfx_loader_dx12.dll) and SDR DXGI hook (dinput8.dll), bypasses REDprelauncher.exe, and disables winspool.drv."),
-        GamePresetInfo(appID: 1151340, title: "Fallout 76", subtitle: "Creation Engine • 64-bit DirectX 11 Online", recommendedSummary: "Rosetta 2 / FEX + DXMT (DX11) + XAudio2 & Borderless Fix", notes: "Uses DXMT for low-stutter DirectX 11 translation (preventing Fallout76.exe's bundled libcef.dll from forcing WineD3D) and native xaudio2_7 + vcruntime140 overrides."),
+        GamePresetInfo(appID: 1151340, title: "Fallout 76", subtitle: "Creation Engine • 64-bit DirectX 11 Online", recommendedSummary: "Rosetta 2 + DXMT (DX11) + 60 FPS Metal Pacing & Stutter Fix", notes: "Uses DXMT with 60 FPS Metal CoreAnimation pacing, disables Bethesda's VSync stutter lock (iPresentInterval=0), optimizes shadow distance & volumetric lighting, caps tessellation, and uses native xaudio2_7."),
         GamePresetInfo(appID: 668580, title: "Atomic Heart", subtitle: "Unreal Engine 4 • 64-bit DirectX 12 / 11", recommendedSummary: "Rosetta 2 + D3DMetal (DX12) + AVX + XAudio2", notes: "Uses Rosetta 2 with AVX and D3DMetal for Unreal Engine 4 DirectX 12 rendering, plus native xaudio2_9 and VC++ runtime overrides."),
         GamePresetInfo(appID: 3105440, title: "Heroes of Might and Magic: Olden Era", subtitle: "Unity 6 Engine • 64-bit DirectX 11 + Media Foundation Video", recommendedSummary: "Rosetta 2 + D3DMetal + Standard DPI + Internal APFS Prefix", notes: "Uses D3DMetal on Rosetta 2 so IDXGIResource::GetSharedHandle and D3D11Fence work for .mp4 intro/campaign videos, while purging exFAT ._* files and keeping Retina scaling off."),
         GamePresetInfo(appID: 1174180, title: "Red Dead Redemption 2", subtitle: "RAGE Engine • 64-bit DirectX 12 / Vulkan", recommendedSummary: "Rosetta 2 + D3DMetal (DX12) + Anti-Flicker / SDR / TAA Fix", notes: "Disables D3DMetal DLSS-to-MetalFX (nvngx=d, D3DM_ENABLE_METALFX=0) and clamps NaN/Inf shader samples to eliminate 3D world blinking, while configuring system.xml for DX12 SDR Windowed Borderless with TAA High."),
@@ -429,6 +429,7 @@ public enum GameQuirksDatabase {
             profile.advertiseAVX = true
             profile.sync = .msync
             profile.dllOverrides["xaudio2_7"] = "n,b"
+            profile.extraEnvironment["DXMT_CONFIG"] = "d3d11.maxFrameRate=60;d3d11.preferredMaxFrameRate=60;d3d11.maxTessFactor=16"
         }),
         668580: ("Atomic Heart", { profile in
             dx12RosettaRule(&profile)

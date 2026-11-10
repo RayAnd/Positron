@@ -63,11 +63,12 @@ struct PositronCoreTests {
         #expect(atomicHeart.dllOverrides["xaudio2_9"] == "n,b")
         #expect(GameQuirksDatabase.presetInfo(forAppID: 668580)?.title == "Atomic Heart")
 
-        // 4. Fallout 76 - AppID 1151340 (Forces Rosetta 2 because 1 MB PE stack reserve overflows FEX xtajit64.dll)
+        // 4. Fallout 76 - AppID 1151340 (Forces Rosetta 2 + 60 FPS Metal pacing and stutter fix)
         let fallout76 = GameQuirksDatabase.defaultProfile(forAppID: 1151340, preferredTranslator: .fex)
         #expect(fallout76.translator == .rosetta)
         #expect(fallout76.graphics == .dxmt)
         #expect(fallout76.advertiseAVX == true)
+        #expect(fallout76.extraEnvironment["DXMT_CONFIG"]?.contains("d3d11.maxFrameRate=60") == true)
 
         // 5. Heroes of Might and Magic: Olden Era - AppID 3105440 (D3DMetal for MediaFoundation .mp4 shared texture handles)
         let oldenEra = GameQuirksDatabase.defaultProfile(forAppID: 3105440, preferredTranslator: .fex)

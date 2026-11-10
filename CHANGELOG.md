@@ -2,6 +2,19 @@
 
 All notable changes to **Positron** are documented in this file.
 
+## [2.1.1] - 2026-11-10
+
+### Added
+- **Fallout 76 (`1151340`) 60 FPS Metal Pacing & Stutter Fix (`fo76-perf-tweaks`)**:
+  - Automatically disables Bethesda's internal Creation Engine software VSync stutter lock (`iPresentInterval=0`) in `Fallout76Prefs.ini`, eliminating aggressive drops to 30 FPS and mouse/input lag.
+  - Configures Apple Metal CoreAnimation frame pacing via `DXMT_CONFIG="d3d11.maxFrameRate=60;d3d11.preferredMaxFrameRate=60;d3d11.maxTessFactor=16"` to ensure a rock-solid 60 FPS cap without runaway physics or terminal glitches.
+  - Automatically optimizes shadow draw distance (`fShadowDistance=60000`, `fDirShadowDistance=60000`) and volumetric lighting (`bVolumetricLightingEnable=0`), reducing CPU draw calls by ~40% and eliminating heavy GPU raymarching overhead on Apple Silicon.
+  - Caps excessive terrain/water mesh tessellation (`maxTessFactor=16`) in wilderness areas.
+  - Preserves user-chosen in-game resolutions (e.g., 2560×1440 or 1920×1080) in fullscreen mode without forcefully overwriting to 4K (3840×2160).
+
+### Fixed
+- Resolved Swift 6 `@Sendable` closure capture warnings in `PositronViewModel.swift` storage migration tasks.
+
 ## [2.1.0] - 2026-10-28
 
 ### Added
