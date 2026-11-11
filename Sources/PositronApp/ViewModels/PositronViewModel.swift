@@ -76,6 +76,9 @@ final class PositronViewModel {
     )
     var isStorageBusy: Bool = false
     var storageBusyMessage: String = ""
+    var availableUpdate: PositronReleaseInfo? = nil
+    var isCheckingForUpdates: Bool = false
+    var currentAppVersion: String { PositronUpdateChecker.currentAppVersion }
 
     @ObservationIgnored private var detectedCache: [UInt32: PresetCatalogEntry] = [:]
     @ObservationIgnored private var libraryWatcher: SteamLibraryWatcher?
@@ -94,6 +97,9 @@ final class PositronViewModel {
             self?.refreshInstalledGames()
         }
         libraryWatcher?.watch(libraries.filter(\.isConnected).map(\.steamappsURL))
+        if PositronUpdateChecker.shouldCheckAutomatically() {
+            checkForUpdatesAsync(manual: false)
+        }
     }
 
     var installedGamesList: [GamePresetInfo] {
@@ -759,6 +765,45 @@ final class PositronViewModel {
             loadProfile(for: firstID)
         }
         statusBanner = "Removed \(game.title) from Positron. Its prefix in Positron/prefixes/\(game.id) was kept."
+    }
+
+    // MARK: - In-App Privacy-Respecting Update Checker
+
+    func checkForUpdatesAsync(manual: Bool = false) {
+        guard !isCheckingForUpdates else { return }
+        isCheckingForUpdates = true
+        if manual {
+            statusBanner = "Checking for Positron updates on GitHub…"
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await PositronUpdateChecker.checkForUpdates()
+            self.isCheckingForUpdates = false
+            switch result {
+            case .updateAvailable(let release):
+                self.availableUpdate = release
+                self.statusBanner = "Positron \(release.tagName) is available! Click Download Update to install."
+            case .upToDate(let version):
+                self.availableUpdate = nil
+                if manual {
+                    self.statusBanner = "Positron v\(version) is currently the latest version."
+                }
+            case .failed(let err):
+                if manual {
+                    self.statusBanner = "Update check failed: \(err)"
+                }
+            }
+        }
+    }
+
+    func openReleaseDownload(_ update: PositronReleaseInfo) {
+        let targetURL = update.dmgAssetURL ?? update.htmlURL
+        NSWorkspace.shared.open(targetURL)
+        statusBanner = "Opening \(update.tagName) download in browser…"
+    }
+
+    func dismissAvailableUpdate() {
+        availableUpdate = nil
     }
 
     func openKofiSupport() {

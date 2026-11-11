@@ -34,7 +34,9 @@ struct ContentView: View {
                         isSidebarVisible: $isSidebarVisible
                     )
 
-                    if !vm.steamState.isPositronInjected || vm.isBridgeUpdateNeeded {
+                    if let update = vm.availableUpdate {
+                        PositronUpdateAvailableBanner(vm: vm, update: update)
+                    } else if !vm.steamState.isPositronInjected || vm.isBridgeUpdateNeeded {
                         PositronActionBanner(vm: vm)
                     }
 
@@ -65,6 +67,15 @@ struct ContentView: View {
                         Text("\(vm.installedApps.count) Windows games • \(vm.libraries.count) Steam library drive(s)")
                             .font(.caption2)
                             .foregroundStyle(PositronTheme.mutedText(colorScheme))
+                        Button {
+                            vm.checkForUpdatesAsync(manual: true)
+                        } label: {
+                            Label("Check Updates", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .controlSize(.small)
+                        .glassActionButton()
+                        .help("Check for Positron releases on GitHub")
+
                         Button {
                             vm.refreshAll()
                         } label: {
@@ -638,5 +649,65 @@ struct SupportPositronSheet: View {
         }
         .padding(22)
         .frame(width: 580)
+    }
+}
+
+// MARK: - In-App Update Available Banner
+
+struct PositronUpdateAvailableBanner: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Bindable var vm: PositronViewModel
+    let update: PositronReleaseInfo
+
+    var body: some View {
+        let accent = PositronTheme.accentGreen(colorScheme)
+        HStack(spacing: 12) {
+            Image(systemName: "sparkles")
+                .font(.title3.weight(.bold))
+                .foregroundStyle(accent)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    Text("Positron \(update.tagName) Available")
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(PositronTheme.primaryText(colorScheme))
+                    BadgePill(text: "NEW VERSION", color: .green)
+                }
+                Text("You are on v\(vm.currentAppVersion). \(update.title) is ready to download from GitHub.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(PositronTheme.secondaryText(colorScheme))
+            }
+
+            Spacer()
+
+            Button {
+                vm.openReleaseDownload(update)
+            } label: {
+                Label("Download Update", systemImage: "arrow.down.circle.fill")
+                    .fontWeight(.semibold)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.green)
+            .controlSize(.regular)
+
+            Button {
+                vm.dismissAvailableUpdate()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(PositronTheme.secondaryText(colorScheme))
+                    .padding(5)
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss update notice")
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(Color.green.opacity(colorScheme == .dark ? 0.16 : 0.12))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.green.opacity(0.35))
+                .frame(height: 1)
+        }
     }
 }

@@ -448,4 +448,27 @@ struct PositronCoreTests {
         #expect(try String(contentsOf: saveMarker, encoding: .utf8) == "VAULT_76_SAVE")
         #expect(try String(contentsOf: iconMarker, encoding: .utf8) == "ICON_DATA")
     }
+
+    @Test("PositronUpdateChecker accurately compares semver releases and handles update results")
+    func updateCheckerSemverAndResults() {
+        #expect(PositronUpdateChecker.isVersion("2.2.0", strictlyNewerThan: "2.1.1") == true)
+        #expect(PositronUpdateChecker.isVersion("v2.2.0", strictlyNewerThan: "2.1.1") == true)
+        #expect(PositronUpdateChecker.isVersion("2.10.0", strictlyNewerThan: "2.9.0") == true)
+        #expect(PositronUpdateChecker.isVersion("3.0.0", strictlyNewerThan: "2.99.99") == true)
+        #expect(PositronUpdateChecker.isVersion("2.1.1", strictlyNewerThan: "2.1.1") == false)
+        #expect(PositronUpdateChecker.isVersion("2.1.0", strictlyNewerThan: "2.1.1") == false)
+        #expect(PositronUpdateChecker.isVersion("2.1.1-beta", strictlyNewerThan: "2.1.1") == false)
+
+        let release = PositronReleaseInfo(
+            tagName: "v2.2.0",
+            versionString: "2.2.0",
+            title: "Positron v2.2.0",
+            releaseNotes: "New features",
+            htmlURL: URL(string: "https://github.com/RayAnd/Positron/releases/tag/v2.2.0")!,
+            dmgAssetURL: URL(string: "https://github.com/RayAnd/Positron/releases/download/v2.2.0/Positron-v2.2.0-macOS-arm64.dmg"),
+            zipAssetURL: URL(string: "https://github.com/RayAnd/Positron/releases/download/v2.2.0/Positron-v2.2.0-macOS-arm64.zip")
+        )
+        #expect(release.id == "v2.2.0")
+        #expect(release.dmgAssetURL?.lastPathComponent == "Positron-v2.2.0-macOS-arm64.dmg")
+    }
 }

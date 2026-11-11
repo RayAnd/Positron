@@ -109,6 +109,9 @@ struct PositronAppMain: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    viewModel.checkForUpdatesAsync(manual: true)
+                }
                 Divider()
                 Button("Support Positron ❤️…") {
                     viewModel.showSupportSheet = true
