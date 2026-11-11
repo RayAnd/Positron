@@ -42,7 +42,7 @@ public enum PositronUpdateCheckResult: Sendable, Equatable {
 
 public enum PositronUpdateChecker {
     public static let defaultRepo = "RayAnd/Positron"
-    public static let fallbackVersion = "2.1.1"
+    public static let fallbackVersion = "2.2.0"
 
     public static var currentAppVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String

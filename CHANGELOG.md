@@ -2,6 +2,17 @@
 
 All notable changes to **Positron** are documented in this file.
 
+## [2.2.0] - 2026-11-11
+
+### Added
+- **In-App Privacy-Respecting Update Checker (`PositronUpdateChecker`)**:
+  - Automatically checks GitHub Releases for new updates with an anonymous, privacy-preserving User-Agent (zero personal telemetry or tracking).
+  - In-app **Update Available** banner appears with release notes and a one-click **Download Update** button.
+  - Added **Check for Updates…** menu item under the native macOS Positron application menu and in the bottom status bar.
+- **Pharaoh: A New Era (`1351080`) Startup Hang Fix (`pharaoh-intro-bypass`)**:
+  - Bypasses the unskippable startup intro cinematic that hangs on Wine DXGI shared texture handles (`IDXGIResource::GetSharedHandle`) by injecting `IsIntroAlreadyViewed=1` into the Windows registry before launch.
+  - Configures Apple D3DMetal (GPTK) on Rosetta 2 for native shared texture support and stable 60 FPS gameplay.
+
 ## [2.1.1] - 2026-11-10
 
 ### Added

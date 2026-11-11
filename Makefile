@@ -1,7 +1,7 @@
 CC       := clang
 ARCH     := arm64
 MIN_VER  := 15.0
-VERSION  ?= 2.1.1
+VERSION  ?= 2.2.0
 CFLAGS   := -arch $(ARCH) -mmacosx-version-min=$(MIN_VER) -std=c17 -O2 -Wall -Wextra -Wno-unused-parameter -fPIC
 LDFLAGS  := -arch $(ARCH) -mmacosx-version-min=$(MIN_VER)
 OUT_DIR  := out
