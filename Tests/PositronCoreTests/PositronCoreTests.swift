@@ -35,6 +35,12 @@ struct PositronCoreTests {
 
     @Test("Curated presets for Witcher 3 Remaster, RDR2, Atomic Heart, Fallout 76, and Heroes of Olden Era configure optimal settings")
     func curatedGameProfiles() {
+        // 0. Pharaoh: A New Era - AppID 1351080 (D3DMetal + Rosetta 2 for shared DXGI texture handles)
+        let pharaoh = GameQuirksDatabase.defaultProfile(forAppID: 1351080, preferredTranslator: .fex)
+        #expect(pharaoh.translator == .rosetta)
+        #expect(pharaoh.graphics == .d3dMetal)
+        #expect(GameQuirksDatabase.presetInfo(forAppID: 1351080)?.title == "Pharaoh: A New Era")
+
         // 1. The Witcher 3: Wild Hunt (Next-Gen Remaster) - AppID 292030
         let witcher3 = GameQuirksDatabase.defaultProfile(forAppID: 292030, preferredTranslator: .fex)
         #expect(witcher3.translator == .rosetta)

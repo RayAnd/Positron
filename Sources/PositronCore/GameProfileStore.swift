@@ -338,6 +338,7 @@ public enum GameQuirksDatabase {
         GamePresetInfo(appID: 292030, title: "The Witcher 3: Wild Hunt — Remastered", subtitle: "REDengine 3 • 64-bit DirectX 12 (Patch 5.0+)", recommendedSummary: "Rosetta 2 + D3DMetal (DX12) + Stream-Output PSO & SDR Fix", notes: "Automatically links bin/x64 -> x64_dx12, stages the stream-output PSO skip proxy (amd_fidelityfx_loader_dx12.dll) and SDR DXGI hook (dinput8.dll), bypasses REDprelauncher.exe, and disables winspool.drv."),
         GamePresetInfo(appID: 1151340, title: "Fallout 76", subtitle: "Creation Engine • 64-bit DirectX 11 Online", recommendedSummary: "Rosetta 2 + DXMT (DX11) + 60 FPS Metal Pacing & Stutter Fix", notes: "Uses DXMT with 60 FPS Metal CoreAnimation pacing, disables Bethesda's VSync stutter lock (iPresentInterval=0), optimizes shadow distance & volumetric lighting, caps tessellation, and uses native xaudio2_7."),
         GamePresetInfo(appID: 668580, title: "Atomic Heart", subtitle: "Unreal Engine 4 • 64-bit DirectX 12 / 11", recommendedSummary: "Rosetta 2 + D3DMetal (DX12) + AVX + XAudio2", notes: "Uses Rosetta 2 with AVX and D3DMetal for Unreal Engine 4 DirectX 12 rendering, plus native xaudio2_9 and VC++ runtime overrides."),
+        GamePresetInfo(appID: 1351080, title: "Pharaoh: A New Era", subtitle: "Unity Engine • 64-bit DirectX 11 + Video Player Fix", recommendedSummary: "Rosetta 2 + D3DMetal + Intro Video Bypass", notes: "Bypasses the unskippable startup intro video that hangs on Wine DXGI shared texture handles (IsIntroAlreadyViewed=1) and configures Rosetta 2 + D3DMetal for stable 60 FPS city-building."),
         GamePresetInfo(appID: 3105440, title: "Heroes of Might and Magic: Olden Era", subtitle: "Unity 6 Engine • 64-bit DirectX 11 + Media Foundation Video", recommendedSummary: "Rosetta 2 + D3DMetal + Standard DPI + Internal APFS Prefix", notes: "Uses D3DMetal on Rosetta 2 so IDXGIResource::GetSharedHandle and D3D11Fence work for .mp4 intro/campaign videos, while purging exFAT ._* files and keeping Retina scaling off."),
         GamePresetInfo(appID: 1174180, title: "Red Dead Redemption 2", subtitle: "RAGE Engine • 64-bit DirectX 12 / Vulkan", recommendedSummary: "Rosetta 2 + D3DMetal (DX12) + Anti-Flicker / SDR / TAA Fix", notes: "Disables D3DMetal DLSS-to-MetalFX (nvngx=d, D3DM_ENABLE_METALFX=0) and clamps NaN/Inf shader samples to eliminate 3D world blinking, while configuring system.xml for DX12 SDR Windowed Borderless with TAA High."),
         GamePresetInfo(appID: 1286830, title: "STAR WARS: The Old Republic", subtitle: "HeroEngine • 32-bit CEF Launcher -> 64-bit Retail Client", recommendedSummary: "Rosetta 2 (WoW64) + WineD3D + CEF Launcher Fix", notes: "Uses Rosetta 2 + WineD3D and appends --disable-gpu --disable-gpu-compositing to launcher.exe (libcef.dll) so the launcher window renders visibly without a cross-process D3D11 swapchain."),
@@ -434,6 +435,15 @@ public enum GameQuirksDatabase {
         668580: ("Atomic Heart", { profile in
             dx12RosettaRule(&profile)
             profile.dllOverrides["xaudio2_9"] = "n,b"
+        }),
+        1351080: ("Pharaoh: A New Era", { profile in
+            profile.translator = .rosetta
+            profile.graphics = .d3dMetal
+            profile.advertiseAVX = true
+            profile.sync = .msync
+            profile.dllOverrides["vcruntime140"] = "n,b"
+            profile.dllOverrides["vcruntime140_1"] = "n,b"
+            profile.dllOverrides["d3dcompiler_47"] = "n,b"
         }),
         3105440: ("Heroes of Might and Magic: Olden Era", { profile in
             profile.translator = .rosetta
@@ -600,7 +610,7 @@ public enum GameQuirksDatabase {
 
     public static func builtInDefaultProfile(forAppID appID: UInt32, preferredTranslator: CPUTranslator = .rosetta) -> GameProfile {
         let forceRosettaIDs: Set<UInt32> = [
-            292030, 1151340, 668580, 3105440, 1091500, 1174180, 1245620, 1286830, 38410, 412020,
+            292030, 1151340, 1351080, 668580, 3105440, 1091500, 1174180, 1245620, 1286830, 38410, 412020,
             1716740, 1888160, 1363080, 1466860, 2215430, 2322010, 1151640, 2420110,
             1817070, 1817190, 1888930, 1771300, 1446780, 2246340, 2344520, 2694490,
             2358720, 2054970, 2050650, 1196590, 782330, 379720, 2161700, 2072450,

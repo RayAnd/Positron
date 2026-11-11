@@ -1592,6 +1592,34 @@ if [ "$verb" = waitforexitandrun ] && game_fix_on witcher3-dx12-fix && { [ "$app
   fi
 fi
 
+# Automatic runtime fix for Pharaoh: A New Era (AppID 1351080):
+# Bypasses the unskippable startup intro video that hangs on Wine DXGI shared texture handles
+# (Got null handle from IDXGIResource::GetSharedHandle) by ensuring IsIntroAlreadyViewed=1
+# in HKEY_CURRENT_USER\Software\Triskell Interactive\Pharaoh, and forces D3DMetal.
+if [ "$verb" = waitforexitandrun ] && game_fix_on pharaoh-intro-bypass && { [ "$app_id" = "1351080" ] || [ -f "$STEAM_COMPAT_INSTALL_PATH/Pharaoh.exe" ]; }; then
+  export CX_GRAPHICS_BACKEND="d3dmetal"
+  pharaoh_reg="$WINEPREFIX/user.reg"
+  if [ -f "$pharaoh_reg" ]; then
+    python3 -c '
+import sys
+p = sys.argv[1]
+try:
+    content = open(p, "r", encoding="utf-8", errors="ignore").read()
+    target = "[Software\\\\Triskell Interactive\\\\Pharaoh]"
+    if target in content:
+        if "IsIntroAlreadyViewed" not in content:
+            idx = content.find(target) + len(target)
+            content = content[:idx] + "\n\"IsIntroAlreadyViewed\"=dword:00000001" + content[idx:]
+            open(p, "w", encoding="utf-8").write(content)
+    else:
+        open(p, "a", encoding="utf-8").write("\n\n" + target + "\n\"IsIntroAlreadyViewed\"=dword:00000001\n")
+except Exception:
+    pass
+' "$pharaoh_reg" 2>/dev/null || true
+    echo "=== Pharaoh: A New Era fix: bypassed unskippable intro video (IsIntroAlreadyViewed=1) and configured D3DMetal ===" >> "$log" 2>&1 || true
+  fi
+fi
+
 # Automatic runtime fix for Red Dead Redemption 2 (AppID 1174180):
 # Eliminates 3D world/lighting blinking under D3DMetal by disabling D3DMetal's broken DLSS-to-MetalFX
 # bridge (nvngx=d, D3DM_ENABLE_METALFX=0), clamping NaN/Inf shader samples, using WINEESYNC=1,

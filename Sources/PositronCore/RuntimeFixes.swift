@@ -32,6 +32,11 @@ public struct RuntimeFix: Sendable, Identifiable, Equatable {
             scope: .game, appIDs: [1174180]
         ),
         RuntimeFix(
+            id: "pharaoh-intro-bypass", title: "Pharaoh: A New Era intro video hang fix",
+            detail: "Sets IsIntroAlreadyViewed=1 in the registry to bypass the unskippable startup intro video that hangs on Wine DXGI shared texture handles.",
+            scope: .game, appIDs: [1351080]
+        ),
+        RuntimeFix(
             id: "fo76-perf-tweaks", title: "Fallout 76 smooth 60 FPS pacing & graphics optimization",
             detail: "Disables Bethesda's VSync stutter lock (iPresentInterval=0), coordinates 60 FPS Metal pacing, optimizes shadow distance & volumetric lighting, and caps tessellation.",
             scope: .game, appIDs: [1151340]
