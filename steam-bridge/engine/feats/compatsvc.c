@@ -135,7 +135,7 @@ static int offered(const uint8_t *tool, uint32_t platforms, int bypass) {
 
 static const char *tool_name(const void *tool) {
     if (!tool) return NULL;
-    return *(const char *const *)((const uint8_t *)tool + COMPAT_TOOL_NAME_OFF);
+    return *(const char *const *)((const uint8_t *)tool + np_compat_tool_off(COMPAT_TOOL_NAME_OFF));
 }
 
 static int get_compat_tools(uintptr_t request, uintptr_t response) {
@@ -214,7 +214,7 @@ static int get_compat_tools(uintptr_t request, uintptr_t response) {
 
         int32_t prio = *(const int32_t *)(tool + COMPAT_TOOL_PRIORITY_OFF);
         pb_tool(&w, RESP_TOOLS, name,
-                *(const char *const *)(tool + COMPAT_TOOL_DISPLAY_OFF),
+                *(const char *const *)(tool + np_compat_tool_off(COMPAT_TOOL_DISPLAY_OFF)),
                 active && strcmp(active, name) == 0,
                 best != 0 && prio != best && prio > 0);
         if (!w.ok) {

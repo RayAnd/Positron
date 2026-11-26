@@ -2,6 +2,14 @@
 
 All notable changes to **Positron** are documented in this file.
 
+## [2.2.1] - 2026-11-26
+
+### Fixed
+- **Steam quit about 10 seconds after launch following the Steam client update of Nov 24.** The update inserted another field into the client's compatibility-tool entry, moving the tool name and display fields. The bridge kept reading the name at its old offset, so it did not recognise the tools Steam had already registered from disk, registered them again at runtime in the wrong layout and crashed the client.
+  - The bridge now reads the name and display positions back from the tools Steam registered, and uses them for every access to a tool entry.
+  - Runtime registration is skipped unless that layout is confirmed, so a future layout change can no longer crash Steam this way.
+  - Game launches routed through Positron (shell wrap and shortcut bundles) and the compatibility tool list read the same fields and are corrected too.
+
 ## [2.2.0] - 2026-11-11
 
 ### Added

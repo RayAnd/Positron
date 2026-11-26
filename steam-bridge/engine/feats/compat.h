@@ -18,13 +18,16 @@
 #define COMPAT_PLATFORM_WINDOWS  0x1
 #define COMPAT_PLATFORM_MACOS    0x2
 
-// Tool entry fields ahead of the insertion point. These never move.
+// Tool entry fields ahead of the name. These have not moved.
 #define COMPAT_TOOL_GATE_FLAGS_OFF  0x24
 #define COMPAT_TOOL_GATE_HIDDEN     0x1
 #define COMPAT_TOOL_PRIORITY_OFF    0x38
+
+// The name and display sit between the client's insertions into the tool entry and
+// move by the name shift, which is probed from the tools the client registered.
 #define COMPAT_TOOL_DISPLAY_OFF     0x50
 
-// Tool entry fields at or past the insertion point. These are the baseline the
+// Tool entry fields at or past the install insertion point. These are the baseline the
 // probed shift is measured against. Read live values through np_compat_tool_off.
 #define COMPAT_TOOL_INSTALL_OFF     0x58
 #define COMPAT_TOOL_APPID_OFF       0x60
@@ -47,8 +50,8 @@ bool np_compat_is_windows_only_table(const void *compat_mgr, const void *map);
 
 void *np_compat_user(const void *compat_mgr);
 
-// Live position of a field by its reference offset. Fields ahead of the
-// insertion point come back unchanged.
+// Live position of a field by its reference offset. Fields ahead of the name
+// come back unchanged.
 uint32_t np_compat_tool_off(uint32_t reference_off);
 
 // Live stride of the manager's tool array.

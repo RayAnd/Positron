@@ -8,6 +8,7 @@
 
 #include <dirent.h>
 #include <dlfcn.h>
+#include <mach/mach.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -79,6 +80,10 @@ static int ensure_dir(const char *path) {
 }
 
 static int32_t g_tool_shift;
+// How far the name and display moved. The client has inserted fields ahead of
+// them as well as ahead of install, so this is read back by probe_name_shift
+// and is never larger than g_tool_shift.
+static int32_t g_name_shift;
 
 // LDR Wt,[X0,#imm]. Writes the byte offset and destination register.
 static int ldr32_from_x0(uint32_t w, uint32_t *off, uint32_t *rt) {
@@ -311,7 +316,9 @@ void *np_compat_user(const void *compat_mgr) {
 }
 
 uint32_t np_compat_tool_off(uint32_t reference_off) {
-    if (reference_off < COMPAT_TOOL_INSTALL_OFF) return reference_off;
+    if (reference_off < COMPAT_TOOL_NAME_OFF) return reference_off;
+    if (reference_off < COMPAT_TOOL_INSTALL_OFF)
+        return (uint32_t)((int32_t)reference_off + g_name_shift);
     return (uint32_t)((int32_t)reference_off + g_tool_shift);
 }
 
@@ -793,7 +800,25 @@ void *np_compat_manager(void) {
 int np_compat_app_runs_tool(uint32_t appid) {
     const uint8_t *tool = np_compat_tool_for_app(g_manager, appid);
 
-    return tool && is_tool_name(*(const char *const *)(tool + COMPAT_TOOL_NAME_OFF));
+    return tool && is_tool_name(*(const char *const *)(tool + np_compat_tool_off(COMPAT_TOOL_NAME_OFF)));
+}
+
+// The tool list belongs to the client, so a field read from it can hold anything
+// when its layout has moved. Reads go through the kernel so a bad pointer costs a
+// failed match, not the client.
+static int read_mem(uintptr_t addr, void *out, size_t n) {
+    vm_size_t got = 0;
+    return vm_read_overwrite(mach_task_self(), (vm_address_t)addr, (vm_size_t)n,
+                             (vm_address_t)out, &got) == KERN_SUCCESS && got == n;
+}
+
+static int slot_holds_string(const uint8_t *slot, const char *want) {
+    uint64_t ptr;
+    char buf[256];
+    size_t n = strlen(want) + 1;
+    return n <= sizeof(buf) &&
+           read_mem((uintptr_t)slot, &ptr, sizeof(ptr)) && np_plausible_ptr(ptr) &&
+           read_mem((uintptr_t)ptr, buf, n) && memcmp(buf, want, n) == 0;
 }
 
 static void *find_tool(void *compat_mgr, const char *wanted) {
@@ -812,26 +837,52 @@ static void *find_tool(void *compat_mgr, const char *wanted) {
 
     for (uint32_t i = 0; i < count; i++) {
         uint8_t *entry = array + (size_t)i * np_compat_tool_stride();
-        const char *name = *(const char **)(entry + COMPAT_TOOL_NAME_OFF);
-        if (name && strcmp(name, wanted) == 0)
+        if (slot_holds_string(entry + np_compat_tool_off(COMPAT_TOOL_NAME_OFF), wanted))
             return entry;
     }
     return NULL;
 }
 
-void np_compat_register_crossover(void *compat_mgr) {
-    static int registered = 0;
+// Steam registers the tools declared on disk before the first compat query, so a
+// tool this module declared is already in the manager's list with its own name and
+// display strings. Finding both where the shift says they sit confirms the layout
+// this module writes and reads. Returns 0 when no declared tool matches, leaving
+// the baseline in place.
+static int probe_name_shift(const uint8_t *mgr) {
+    const uint8_t *array = *(const uint8_t *const *)(mgr + COMPAT_MANAGER_TOOL_ARRAY_OFF);
+    uint32_t count = *(const uint32_t *)(mgr + COMPAT_MANAGER_TOOL_COUNT_OFF);
+    if (!np_plausible_ptr((uint64_t)(uintptr_t)array) || count > np_compat_manager_tools_max())
+        return 0;
 
-    // Every compat query arrives on the instance the properties page reads, which is
-    // the one the tool list has to be enumerated from.
-    if (compat_mgr)
-        g_manager = compat_mgr;
+    int32_t found = -1;
+    for (uint32_t i = 0; i < count; i++) {
+        const uint8_t *entry = array + (size_t)i * np_compat_tool_stride();
+        for (int t = 0; t < g_tool_count; t++) {
+            for (int32_t shift = 0; shift <= g_tool_shift; shift += 8) {
+                if (!slot_holds_string(entry + COMPAT_TOOL_NAME_OFF + shift, g_tools[t].name) ||
+                    !slot_holds_string(entry + COMPAT_TOOL_DISPLAY_OFF + shift, g_tools[t].display))
+                    continue;
+                if (found >= 0 && found != shift) {
+                    NP_ERR("np_compat_probe_name_shift: tools disagree on where the name sits "
+                           "(%+d and %+d)", found, shift);
+                    return 0;
+                }
+                found = shift;
+            }
+        }
+    }
+    if (found < 0)
+        return 0;
 
-    if (registered || !compat_mgr || !g_yld_register_tool)
-        return;
-    registered = 1;
-    load_tool_list_once();
+    g_name_shift = found;
+    if (g_name_shift)
+        NP_LOG("np_compat_probe_name_shift: name and display are %+d from the baseline "
+               "(name 0x%x)", g_name_shift, np_compat_tool_off(COMPAT_TOOL_NAME_OFF));
+    return 1;
+}
 
+// Registers the declared tools the client's own scan did not pick up.
+static void register_missing_tools(void *compat_mgr) {
     // YldRegisterTool copies the entry and its strings. Each buffer carries headroom
     // for a client that inserted a field. to_oslist=macos passes
     // the registration gate, from_oslist=windows intersects the app mask so the
@@ -857,8 +908,8 @@ void np_compat_register_crossover(void *compat_mgr) {
         uint8_t *tool = buffers[i];
         memset(tool, 0, sizeof(buffers[i]));
         *(uint32_t *)(tool + COMPAT_TOOL_FLAGS_OFF)      = COMPAT_TOOL_FLAG_NO_APP;
-        *(const char **)(tool + COMPAT_TOOL_NAME_OFF)    = t->name;
-        *(const char **)(tool + COMPAT_TOOL_DISPLAY_OFF) = t->display;
+        *(const char **)(tool + np_compat_tool_off(COMPAT_TOOL_NAME_OFF))    = t->name;
+        *(const char **)(tool + np_compat_tool_off(COMPAT_TOOL_DISPLAY_OFF)) = t->display;
         *(const char **)(tool + np_compat_tool_off(COMPAT_TOOL_INSTALL_OFF)) = t->dir;
         *(uint32_t *)(tool + np_compat_tool_off(COMPAT_TOOL_APPID_OFF)) = 0;
         *(const char **)(tool + np_compat_tool_off(COMPAT_TOOL_FROM_OSLIST_OFF)) = from_oslist;
@@ -871,6 +922,28 @@ void np_compat_register_crossover(void *compat_mgr) {
     }
 
     free(buffers);
+}
+
+void np_compat_register_crossover(void *compat_mgr) {
+    static int registered = 0;
+
+    // Every compat query arrives on the instance the properties page reads, which is
+    // the one the tool list has to be enumerated from.
+    if (compat_mgr)
+        g_manager = compat_mgr;
+
+    if (registered || !compat_mgr || !g_yld_register_tool)
+        return;
+    registered = 1;
+    load_tool_list_once();
+
+    // A tool written into a layout the client no longer uses crashes it, so nothing
+    // is registered at runtime until the layout is confirmed.
+    if (probe_name_shift(compat_mgr))
+        register_missing_tools(compat_mgr);
+    else
+        NP_ERR("np_compat_register_crossover: no declared tool found in the manager's list, "
+               "so the tool layout is unconfirmed and registration is left to the client's scan");
 
     // Ensure native macOS games (1091500 Cyberpunk, 412020 Metro Exodus, 1086940 BG3) have no forced tool;
     // Windows games are configured game-by-game from Positron.app.
